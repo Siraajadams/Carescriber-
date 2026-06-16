@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Carescriber",
-  description: "AI Clinical Operating System",
+  title: "CareScriber AI",
+  description: "Videomed Clinical Assistant",
 };
 
 export default function RootLayout({
