@@ -1,0 +1,13 @@
+useEffect(() => {
+  async function checkUser() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.push("/login");
+    }
+  }
+
+  checkUser();
+}, [router]);
