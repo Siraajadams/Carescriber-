@@ -1,113 +1,247 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
 
 type Patient = {
-  name: string;
+  id: string;
+  first_name: string;
   surname: string;
-  idNumber: string;
-  age: string;
-  dob: string;
-  gender: string;
-  mobile: string;
-  email: string;
-  medicalAid: string;
-  allergies: string;
-  medicines: string;
+  patient_id?: string;
+  date_of_birth?: string;
+  gender?: string;
+  mobile?: string;
 };
 
 export default function PatientsPage() {
+  const router = useRouter();
+
+  const [search, setSearch] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const [firstName, setFirstName] = useState("");
+  const [surname, setSurname] = useState("");
+  const [patientId, setPatientId] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [gender, setGender] = useState("Female");
+  const [mobile, setMobile] = useState("");
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const saved = localStorage.getItem("carescriber_patients");
-    if (saved) setPatients(JSON.parse(saved));
+    checkLogin();
   }, []);
 
-  function savePatient(e: any) {
+  async function checkLogin() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+
+    setLoading(false);
+  }
+
+  async function searchPatients() {
+    setMessage("");
+
+    let query = supabase
+      .from("patients")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (search.trim()) {
+      query = query.or(
+        `first_name.ilike.%${search}%,surname.ilike.%${search}%,patient_id.ilike.%${search}%,mobile.ilike.%${search}%`
+      );
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setPatients(data || []);
+  }
+
+  async function createPatient(e: React.FormEvent) {
     e.preventDefault();
-    const form = new FormData(e.currentTarget);
+    setMessage("");
 
-    const patient: Patient = {
-      name: String(form.get("name") || ""),
-      surname: String(form.get("surname") || ""),
-      idNumber: String(form.get("idNumber") || ""),
-      age: String(form.get("age") || ""),
-      dob: String(form.get("dob") || ""),
-      gender: String(form.get("gender") || ""),
-      mobile: String(form.get("mobile") || ""),
-      email: String(form.get("email") || ""),
-      medicalAid: String(form.get("medicalAid") || ""),
-      allergies: String(form.get("allergies") || ""),
-      medicines: String(form.get("medicines") || ""),
-    };
+    if (!firstName || !surname) {
+      setMessage("Please enter patient first name and surname.");
+      return;
+    }
 
-    const updated = [...patients, patient];
-    setPatients(updated);
-    localStorage.setItem("carescriber_patients", JSON.stringify(updated));
-    setMsg("Patient saved successfully.");
-    e.currentTarget.reset();
+    const { data, error } = await supabase
+      .from("patients")
+      .insert({
+        first_name: firstName,
+        surname,
+        patient_id: patientId || `PT-${Math.floor(100000 + Math.random() * 900000)}`,
+        date_of_birth: dateOfBirth || null,
+        gender,
+        mobile,
+        created_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    router.push(`/consultation?patient=${data.id}`);
+  }
+
+  if (loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100">
+        <p className="text-slate-600">Loading patients...</p>
+      </main>
+    );
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white p-4">
+    <main className="min-h-screen bg-slate-100 px-4 py-6">
       <div className="mx-auto max-w-5xl">
-        <Link href="/" className="text-emerald-400">← Back</Link>
+        <header className="mb-6 rounded-3xl bg-white p-6 shadow-sm">
+          <Link href="/dashboard" className="font-semibold text-blue-700">
+            ← Back to Dashboard
+          </Link>
 
-        <div className="mt-6 rounded-3xl bg-slate-900 p-6">
-          <h1 className="text-3xl font-bold">Patient Registration</h1>
+          <h1 className="mt-4 text-3xl font-bold text-slate-900">
+            Patient Search
+          </h1>
 
-          <form onSubmit={savePatient} className="mt-6 grid gap-4 md:grid-cols-2">
-            <input name="name" required placeholder="Name" className="rounded-xl bg-slate-800 p-4" />
-            <input name="surname" required placeholder="Surname" className="rounded-xl bg-slate-800 p-4" />
-            <input name="idNumber" required placeholder="ID / Passport number" className="rounded-xl bg-slate-800 p-4" />
-            <input name="age" placeholder="Age" className="rounded-xl bg-slate-800 p-4" />
-            <input name="dob" type="date" className="rounded-xl bg-slate-800 p-4" />
+          <p className="mt-2 text-slate-600">
+            Search for an existing patient or create a new patient profile.
+          </p>
+        </header>
 
-            <select name="gender" className="rounded-xl bg-slate-800 p-4">
-              <option value="">Select gender</option>
-              <option>Female</option>
-              <option>Male</option>
-              <option>Other</option>
-            </select>
+        <section className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-3xl bg-white p-6 shadow-sm">
+            <h2 className="text-xl font-bold text-slate-900">
+              Search Patient
+            </h2>
 
-            <input name="mobile" placeholder="Mobile" className="rounded-xl bg-slate-800 p-4" />
-            <input name="email" placeholder="Email" className="rounded-xl bg-slate-800 p-4" />
-            <input name="medicalAid" placeholder="Medical aid / none" className="rounded-xl bg-slate-800 p-4" />
+            <div className="mt-4 flex gap-3">
+              <input
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
+                placeholder="Name, surname, patient ID or mobile"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
 
-            <select name="allergies" className="rounded-xl bg-slate-800 p-4">
-              <option>No known allergies</option>
-              <option>Penicillin</option>
-              <option>Sulfa</option>
-              <option>NSAIDs</option>
-              <option>Latex</option>
-              <option>Food allergy</option>
-              <option>Other</option>
-            </select>
+              <button
+                onClick={searchPatients}
+                className="rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white hover:bg-blue-800"
+              >
+                Search
+              </button>
+            </div>
 
-            <textarea name="medicines" placeholder="Current medicines" className="md:col-span-2 rounded-xl bg-slate-800 p-4" />
+            <div className="mt-5 space-y-3">
+              {patients.map((patient) => (
+                <div
+                  key={patient.id}
+                  className="rounded-2xl border border-slate-200 p-4"
+                >
+                  <p className="font-bold text-slate-900">
+                    {patient.first_name} {patient.surname}
+                  </p>
+                  <p className="text-sm text-slate-600">
+                    ID: {patient.patient_id || "Not recorded"} ·{" "}
+                    {patient.gender || "Gender not recorded"} ·{" "}
+                    {patient.mobile || "No mobile"}
+                  </p>
 
-            <button className="md:col-span-2 rounded-xl bg-emerald-500 p-4 font-bold text-black">
-              Save Patient
-            </button>
-          </form>
-
-          {msg && <p className="mt-4 text-emerald-400">{msg}</p>}
-        </div>
-
-        <div className="mt-6 rounded-3xl bg-slate-900 p-6">
-          <h2 className="text-2xl font-bold">Patient Directory</h2>
-          <div className="mt-4 grid gap-3">
-            {patients.map((p, i) => (
-              <div key={i} className="rounded-xl bg-slate-800 p-4">
-                <p className="font-bold">{p.name} {p.surname}</p>
-                <p className="text-sm text-slate-400">ID: {p.idNumber} | Age: {p.age} | {p.gender}</p>
-              </div>
-            ))}
+                  <Link
+                    href={`/consultation?patient=${patient.id}`}
+                    className="mt-3 inline-block rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Start Consultation
+                  </Link>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+
+          <form
+            onSubmit={createPatient}
+            className="rounded-3xl bg-white p-6 shadow-sm"
+          >
+            <h2 className="text-xl font-bold text-slate-900">
+              Register New Patient
+            </h2>
+
+            <div className="mt-5 grid gap-4">
+              <input
+                className="rounded-xl border border-slate-300 px-4 py-3"
+                placeholder="First name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+              />
+
+              <input
+                className="rounded-xl border border-slate-300 px-4 py-3"
+                placeholder="Surname"
+                value={surname}
+                onChange={(e) => setSurname(e.target.value)}
+              />
+
+              <input
+                className="rounded-xl border border-slate-300 px-4 py-3"
+                placeholder="Patient ID / SA ID / Passport"
+                value={patientId}
+                onChange={(e) => setPatientId(e.target.value)}
+              />
+
+              <input
+                type="date"
+                className="rounded-xl border border-slate-300 px-4 py-3"
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+              />
+
+              <select
+                className="rounded-xl border border-slate-300 px-4 py-3"
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+              >
+                <option>Female</option>
+                <option>Male</option>
+                <option>Other</option>
+              </select>
+
+              <input
+                className="rounded-xl border border-slate-300 px-4 py-3"
+                placeholder="Mobile number"
+                value={mobile}
+                onChange={(e) => setMobile(e.target.value)}
+              />
+
+              {message && (
+                <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {message}
+                </div>
+              )}
+
+              <button className="rounded-xl bg-blue-700 px-6 py-4 font-semibold text-white hover:bg-blue-800">
+                Save Patient & Start Consultation
+              </button>
+            </div>
+          </form>
+        </section>
       </div>
     </main>
   );
