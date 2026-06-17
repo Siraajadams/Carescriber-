@@ -8,130 +8,147 @@ import { supabase } from "../../lib/supabaseClient";
 export default function DashboardPage() {
   const router = useRouter();
   const [doctorName, setDoctorName] = useState("Doctor");
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    checkLogin();
-  }, []);
+    async function checkLogin() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-  async function checkLogin() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      if (!user) {
+        router.push("/login");
+        return;
+      }
 
-    if (!user) {
-      router.push("/login");
-      return;
+      setDoctorName(user.user_metadata?.first_name || "Doctor");
     }
 
-    setDoctorName(
-      user.user_metadata?.first_name
-        ? `Dr ${user.user_metadata.first_name}`
-        : "Doctor"
-    );
-
-    setLoading(false);
-  }
+    checkLogin();
+  }, [router]);
 
   async function logout() {
     await supabase.auth.signOut();
     router.push("/login");
   }
 
-  if (loading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-100">
-        <p className="text-slate-600">Loading dashboard...</p>
-      </main>
-    );
-  }
-
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-6">
-      <div className="mx-auto max-w-5xl">
-        <header className="mb-6 flex flex-col gap-4 rounded-3xl bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-blue-700">
-              CareScriber AI
-            </p>
-            <h1 className="mt-1 text-3xl font-bold text-slate-900">
-              Welcome, {doctorName}
-            </h1>
-            <p className="mt-2 text-slate-600">
-              Simple clinical assistant for consultations, SOAP notes and
-              patient summaries.
-            </p>
-          </div>
+    <main style={styles.page}>
+      <section style={styles.card}>
+        <p style={styles.label}>CareScriber AI</p>
 
-          <button
-            onClick={logout}
-            className="rounded-xl border border-slate-300 px-5 py-3 font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Logout
-          </button>
-        </header>
+        <h1 style={styles.title}>Welcome, Dr {doctorName}</h1>
 
-        <section className="grid gap-5 md:grid-cols-3">
-          <Link
-            href="/consultation"
-            className="rounded-3xl bg-blue-700 p-8 text-white shadow-lg hover:bg-blue-800"
-          >
-            <div className="text-4xl">➕</div>
-            <h2 className="mt-5 text-2xl font-bold">New Consultation</h2>
-            <p className="mt-3 text-blue-100">
-              Start recording, generate transcript and SOAP note.
-            </p>
+        <p style={styles.subtitle}>
+          Simple clinical assistant for consultations, SOAP notes and patient
+          summaries.
+        </p>
+
+        <div style={styles.grid}>
+          <Link href="/consultation" style={styles.primaryCard}>
+            <div style={styles.icon}>+</div>
+            <h2>New Consultation</h2>
+            <p>Start recording, generate transcript and SOAP note.</p>
           </Link>
 
-          <Link
-            href="/patients"
-            className="rounded-3xl bg-white p-8 shadow-lg hover:bg-blue-50"
-          >
-            <div className="text-4xl">🔍</div>
-            <h2 className="mt-5 text-2xl font-bold text-slate-900">
-              Search Patient
-            </h2>
-            <p className="mt-3 text-slate-600">
-              Find or register a patient before consultation.
-            </p>
+          <Link href="/patients" style={styles.optionCard}>
+            <div style={styles.icon}>🔍</div>
+            <h2>Search Patient</h2>
+            <p>Find or register a patient before consultation.</p>
           </Link>
 
-          <Link
-            href="/consultation"
-            className="rounded-3xl bg-white p-8 shadow-lg hover:bg-blue-50"
-          >
-            <div className="text-4xl">📝</div>
-            <h2 className="mt-5 text-2xl font-bold text-slate-900">
-              Recent Consultations
-            </h2>
-            <p className="mt-3 text-slate-600">
-              Continue with the latest consultation workflow.
-            </p>
+          <Link href="/consultation" style={styles.optionCard}>
+            <div style={styles.icon}>📝</div>
+            <h2>Recent Consultations</h2>
+            <p>Continue with the latest consultation workflow.</p>
           </Link>
-        </section>
+        </div>
 
-        <section className="mt-6 rounded-3xl bg-white p-6 shadow-sm">
-          <h3 className="text-xl font-bold text-slate-900">
-            CareScriber Workflow
-          </h3>
+        <div style={styles.workflow}>
+          <h3>CareScriber Workflow</h3>
+          <p>1. Select Patient</p>
+          <p>2. Start Recording</p>
+          <p>3. Generate SOAP Note</p>
+          <p>4. Save Consultation</p>
+        </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-4">
-            {[
-              "1. Select Patient",
-              "2. Start Recording",
-              "3. Generate SOAP",
-              "4. Save Summary",
-            ].map((step) => (
-              <div
-                key={step}
-                className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center font-semibold text-slate-700"
-              >
-                {step}
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
+        <button onClick={logout} style={styles.logout}>
+          Logout
+        </button>
+      </section>
     </main>
   );
 }
+
+const styles: { [key: string]: React.CSSProperties } = {
+  page: {
+    minHeight: "100vh",
+    background: "#f1f5f9",
+    padding: 24,
+    fontFamily: "Arial, sans-serif",
+  },
+  card: {
+    maxWidth: 900,
+    margin: "0 auto",
+    background: "#ffffff",
+    borderRadius: 28,
+    padding: 32,
+    boxShadow: "0 20px 45px rgba(15, 23, 42, 0.14)",
+  },
+  label: {
+    color: "#2563eb",
+    fontWeight: 700,
+    fontSize: 16,
+  },
+  title: {
+    fontSize: 44,
+    lineHeight: "50px",
+    color: "#0f172a",
+  },
+  subtitle: {
+    color: "#475569",
+    fontSize: 20,
+    lineHeight: "30px",
+  },
+  grid: {
+    display: "grid",
+    gap: 18,
+    marginTop: 28,
+  },
+  primaryCard: {
+    background: "#2563eb",
+    color: "#ffffff",
+    padding: 24,
+    borderRadius: 22,
+    textDecoration: "none",
+  },
+  optionCard: {
+    background: "#f8fafc",
+    color: "#0f172a",
+    padding: 24,
+    borderRadius: 22,
+    textDecoration: "none",
+    border: "1px solid #cbd5e1",
+  },
+  icon: {
+    fontSize: 34,
+    marginBottom: 10,
+  },
+  workflow: {
+    marginTop: 28,
+    background: "#eff6ff",
+    padding: 22,
+    borderRadius: 20,
+    color: "#1e3a8a",
+  },
+  logout: {
+    marginTop: 24,
+    width: "100%",
+    padding: 16,
+    borderRadius: 14,
+    border: "none",
+    background: "#0f172a",
+    color: "#fff",
+    fontWeight: 700,
+    fontSize: 16,
+  },
+};
