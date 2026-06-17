@@ -74,19 +74,17 @@ export default function PatientsPage() {
     }
 
     const { data, error } = await supabase
-      .from("patients")
-      .insert({
-        first_name: firstName.trim(),
-        surname: surname.trim(),
-        patient_id:
-          patientId.trim() ||
-          `PT-${Math.floor(100000 + Math.random() * 900000)}`,
-        gender,
-        mobile: mobile.trim(),
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+  .from("patients")
+  .insert({
+    first_name: firstName,
+    surname,
+    patient_id: patientId || `PT-${Math.floor(100000 + Math.random() * 900000)}`,
+    gender,
+    mobile_number: mobile,
+    created_at: new Date().toISOString(),
+  })
+  .select()
+  .single();
 
     if (error) {
       setMessage(error.message);
