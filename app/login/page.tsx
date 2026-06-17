@@ -1,60 +1,94 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
 
-export default function DoctorRegisterPage() {
-  const [msg, setMsg] = useState("");
+export default function LoginPage() {
+  const router = useRouter();
 
-  function saveDoctor(e: any) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loginDoctor(e: React.FormEvent) {
     e.preventDefault();
-    const form = new FormData(e.currentTarget);
+    setMessage("");
+    setLoading(true);
 
-    const doctor = {
-      firstName: form.get("firstName"),
-      surname: form.get("surname"),
-      email: form.get("email"),
-      mobile: form.get("mobile"),
-      hpcsa: form.get("hpcsa"),
-      practiceNumber: form.get("practiceNumber"),
-      country: form.get("country"),
-      createdAt: new Date().toISOString(),
-    };
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    localStorage.setItem("carescriber_doctor", JSON.stringify(doctor));
-    setMsg("Doctor registered successfully.");
+    setLoading(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    router.push("/dashboard");
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white p-4">
-      <div className="mx-auto max-w-3xl">
-        <Link href="/" className="text-emerald-400">← Back</Link>
+    <main className="min-h-screen bg-slate-100 px-4 py-10">
+      <div className="mx-auto max-w-md rounded-3xl bg-white p-8 shadow-xl">
+        <Link href="/" className="text-sm font-semibold text-blue-700">
+          ← Back to CareScriber
+        </Link>
 
-        <div className="mt-6 rounded-3xl bg-slate-900 p-6 shadow-xl">
-          <h1 className="text-3xl font-bold">Register Doctor</h1>
-          <p className="text-slate-400 mt-2">Create the clinician profile for CareScriber.</p>
+        <p className="mt-6 text-sm font-semibold text-blue-700">
+          Videomed Clinical Assistant
+        </p>
 
-          <form onSubmit={saveDoctor} className="mt-6 grid gap-4">
-            <input name="firstName" required placeholder="First name" className="rounded-xl bg-slate-800 p-4" />
-            <input name="surname" required placeholder="Surname" className="rounded-xl bg-slate-800 p-4" />
-            <input name="email" required placeholder="Email" className="rounded-xl bg-slate-800 p-4" />
-            <input name="mobile" required placeholder="Mobile" className="rounded-xl bg-slate-800 p-4" />
-            <input name="hpcsa" placeholder="HPCSA / registration number" className="rounded-xl bg-slate-800 p-4" />
-            <input name="practiceNumber" placeholder="Practice number" className="rounded-xl bg-slate-800 p-4" />
+        <h1 className="mt-2 text-3xl font-bold text-slate-900">
+          Doctor Login
+        </h1>
 
-            <select name="country" className="rounded-xl bg-slate-800 p-4">
-              <option>South Africa</option>
-              <option>United Kingdom</option>
-              <option>New Zealand</option>
-            </select>
+        <p className="mt-3 text-slate-600">
+          Login to access consultations and patient records.
+        </p>
 
-            <button className="rounded-xl bg-emerald-500 p-4 font-bold text-black">
-              Save Doctor
-            </button>
-          </form>
+        <form onSubmit={loginDoctor} className="mt-6 grid gap-4">
+          <input
+            type="email"
+            className="rounded-xl border border-slate-300 px-4 py-3"
+            placeholder="Email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
-          {msg && <p className="mt-4 text-emerald-400">{msg}</p>}
-        </div>
+          <input
+            type="password"
+            className="rounded-xl border border-slate-300 px-4 py-3"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          {message && (
+            <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+              {message}
+            </div>
+          )}
+
+          <button
+            disabled={loading}
+            className="rounded-xl bg-blue-700 px-6 py-4 font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+          >
+            {loading ? "Logging in..." : "Login"}
+          </button>
+        </form>
+
+        <p className="mt-6 text-center text-sm text-slate-600">
+          Not registered yet?{" "}
+          <Link href="/register" className="font-semibold text-blue-700">
+            Register as Doctor
+          </Link>
+        </p>
       </div>
     </main>
   );
