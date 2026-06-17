@@ -25,19 +25,12 @@ export default function RegisterDoctorPage() {
     e.preventDefault();
     setMessage("");
 
-    if (
-      !firstName ||
-      !surname ||
-      !email ||
-      !mobile ||
-      !registrationNumber ||
-      !password
-    ) {
+    if (!firstName || !surname || !email || !mobile || !registrationNumber || !password) {
       setMessage("Please complete all required fields.");
       return;
     }
 
-    if (password !== confirmPassword) {
+    if (password.trim() !== confirmPassword.trim()) {
       setMessage("Passwords do not match.");
       return;
     }
@@ -45,15 +38,15 @@ export default function RegisterDoctorPage() {
     setLoading(true);
 
     const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
+      email: email.trim(),
+      password: password.trim(),
       options: {
         data: {
-          first_name: firstName,
-          surname,
-          mobile,
-          registration_number: registrationNumber,
-          practice_number: practiceNumber,
+          first_name: firstName.trim(),
+          surname: surname.trim(),
+          mobile: mobile.trim(),
+          registration_number: registrationNumber.trim(),
+          practice_number: practiceNumber.trim(),
           country,
           role: "doctor",
         },
@@ -66,195 +59,164 @@ export default function RegisterDoctorPage() {
       return;
     }
 
-    const userId = data.user?.id;
-
-    if (userId) {
+    if (data.user?.id) {
       await supabase.from("profiles").upsert({
-        id: userId,
-        first_name: firstName,
-        surname,
-        email,
-        mobile,
-        registration_number: registrationNumber,
-        practice_number: practiceNumber,
+        id: data.user.id,
+        first_name: firstName.trim(),
+        surname: surname.trim(),
+        email: email.trim(),
+        mobile: mobile.trim(),
+        registration_number: registrationNumber.trim(),
+        practice_number: practiceNumber.trim(),
         country,
         role: "doctor",
-        created_at: new Date().toISOString(),
       });
     }
 
     setLoading(false);
-    router.push("/registration-success");
+    router.push("/login");
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-8">
-      <div className="mx-auto max-w-3xl rounded-3xl bg-white p-6 shadow-xl sm:p-10">
-        <div className="mb-8">
-          <Link href="/" className="text-sm font-semibold text-blue-700">
-            ← Back to CareScriber
-          </Link>
+    <main style={styles.page}>
+      <div style={styles.card}>
+        <Link href="/" style={styles.backLink}>← Back to CareScriber</Link>
 
-          <p className="mt-6 text-sm font-semibold uppercase tracking-wide text-blue-700">
-            Videomed Clinical Assistant
-          </p>
+        <p style={styles.label}>Videomed Clinical Assistant</p>
 
-          <h1 className="mt-2 text-3xl font-bold text-slate-900">
-            Register Doctor
-          </h1>
+        <h1 style={styles.title}>Register Doctor</h1>
 
-          <p className="mt-3 text-slate-600">
-            Create your clinician profile for CareScriber AI.
-          </p>
-        </div>
+        <p style={styles.subtitle}>
+          Create your clinician profile for CareScriber AI.
+        </p>
 
-        <form onSubmit={registerDoctor} className="grid gap-5">
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                First name *
-              </label>
-              <input
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                placeholder="First name"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Surname *
-              </label>
-              <input
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={surname}
-                onChange={(e) => setSurname(e.target.value)}
-                placeholder="Surname"
-              />
-            </div>
+        <form onSubmit={registerDoctor} style={styles.form}>
+          <div style={styles.grid}>
+            <input style={styles.input} placeholder="First name *" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+            <input style={styles.input} placeholder="Surname *" value={surname} onChange={(e) => setSurname(e.target.value)} />
           </div>
 
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Email *
-              </label>
-              <input
-                type="email"
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="doctor@email.com"
-              />
-            </div>
+          <input style={styles.input} type="email" placeholder="Email *" value={email} onChange={(e) => setEmail(e.target.value)} />
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Mobile *
-              </label>
-              <input
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={mobile}
-                onChange={(e) => setMobile(e.target.value)}
-                placeholder="082..."
-              />
-            </div>
+          <input style={styles.input} placeholder="Mobile *" value={mobile} onChange={(e) => setMobile(e.target.value)} />
+
+          <input style={styles.input} placeholder="HPCSA / registration number *" value={registrationNumber} onChange={(e) => setRegistrationNumber(e.target.value)} />
+
+          <input style={styles.input} placeholder="Practice number" value={practiceNumber} onChange={(e) => setPracticeNumber(e.target.value)} />
+
+          <select style={styles.input} value={country} onChange={(e) => setCountry(e.target.value)}>
+            <option>South Africa</option>
+            <option>England</option>
+            <option>Wales</option>
+            <option>Scotland</option>
+            <option>New Zealand</option>
+          </select>
+
+          <div style={styles.grid}>
+            <input style={styles.input} type="password" placeholder="Password *" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input style={styles.input} type="password" placeholder="Confirm password *" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
           </div>
 
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                HPCSA / registration number *
-              </label>
-              <input
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={registrationNumber}
-                onChange={(e) => setRegistrationNumber(e.target.value)}
-                placeholder="HPCSA number"
-              />
-            </div>
+          {message && <div style={styles.error}>{message}</div>}
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Practice number
-              </label>
-              <input
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={practiceNumber}
-                onChange={(e) => setPracticeNumber(e.target.value)}
-                placeholder="Practice number"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Country
-            </label>
-            <select
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-              value={country}
-              onChange={(e) => setCountry(e.target.value)}
-            >
-              <option>South Africa</option>
-              <option>England</option>
-              <option>Wales</option>
-              <option>Scotland</option>
-              <option>New Zealand</option>
-            </select>
-          </div>
-
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Password *
-              </label>
-              <input
-                type="password"
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Create password"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Confirm password *
-              </label>
-              <input
-                type="password"
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-600"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm password"
-              />
-            </div>
-          </div>
-
-          {message && (
-            <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
-              {message}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="rounded-xl bg-blue-700 px-6 py-4 font-semibold text-white shadow hover:bg-blue-800 disabled:opacity-60"
-          >
+          <button type="submit" disabled={loading} style={styles.button}>
             {loading ? "Registering..." : "Register Doctor"}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-slate-600">
+        <p style={styles.footer}>
           Already registered?{" "}
-          <Link href="/login" className="font-semibold text-blue-700">
-            Login here
-          </Link>
+          <Link href="/login" style={styles.link}>Login here</Link>
         </p>
       </div>
     </main>
   );
 }
+
+const styles: { [key: string]: React.CSSProperties } = {
+  page: {
+    minHeight: "100vh",
+    background: "#f1f5f9",
+    padding: "24px",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "flex-start",
+    fontFamily: "Arial, sans-serif",
+  },
+  card: {
+    width: "100%",
+    maxWidth: "720px",
+    background: "#ffffff",
+    borderRadius: "24px",
+    padding: "28px",
+    boxShadow: "0 20px 40px rgba(15, 23, 42, 0.12)",
+  },
+  backLink: {
+    color: "#2563eb",
+    fontWeight: 700,
+    textDecoration: "none",
+  },
+  label: {
+    marginTop: "28px",
+    color: "#2563eb",
+    fontWeight: 700,
+    fontSize: "14px",
+  },
+  title: {
+    marginTop: "8px",
+    fontSize: "36px",
+    lineHeight: "42px",
+    color: "#0f172a",
+  },
+  subtitle: {
+    color: "#475569",
+    fontSize: "17px",
+    marginBottom: "24px",
+  },
+  form: {
+    display: "grid",
+    gap: "14px",
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: "14px",
+  },
+  input: {
+    width: "100%",
+    padding: "14px 16px",
+    borderRadius: "12px",
+    border: "1px solid #cbd5e1",
+    fontSize: "16px",
+    boxSizing: "border-box",
+  },
+  error: {
+    background: "#fee2e2",
+    color: "#991b1b",
+    padding: "12px 14px",
+    borderRadius: "12px",
+    fontWeight: 600,
+  },
+  button: {
+    marginTop: "8px",
+    width: "100%",
+    padding: "16px",
+    borderRadius: "14px",
+    border: "none",
+    background: "#2563eb",
+    color: "#ffffff",
+    fontSize: "17px",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  footer: {
+    marginTop: "22px",
+    textAlign: "center",
+    color: "#475569",
+  },
+  link: {
+    color: "#2563eb",
+    fontWeight: 700,
+    textDecoration: "none",
+  },
+};
