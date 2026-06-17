@@ -1,76 +1,124 @@
 import Link from "next/link";
 
 export default function HomePage() {
-  const steps = [
-    "Patient Search",
-    "AI Consent",
-    "Voice Recording",
-    "Live Transcript",
-    "SOAP Note",
-    "ICD-10 Coding",
-    "Prescription Draft",
-    "Referral Letter",
-    "Patient Education",
-  ];
-
   return (
-    <main className="min-h-screen bg-slate-950 text-white px-5 py-6">
-      <section className="mx-auto max-w-6xl">
-        <div className="rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 p-6 md:p-10 shadow-2xl">
-          <p className="text-emerald-400 font-semibold mb-3">
-            Videomed Clinical Assistant
-          </p>
+    <main className="min-h-screen bg-slate-50">
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm text-blue-600 font-semibold">
+              Videomed Clinical Assistant
+            </p>
+            <h1 className="text-2xl font-bold text-slate-900">CareScriber AI</h1>
+          </div>
 
-          <h1 className="text-4xl md:text-6xl font-bold tracking-tight mb-5">
-            CareScriber AI
-          </h1>
+          <Link
+            href="/login"
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold text-sm"
+          >
+            Doctor Login
+          </Link>
+        </div>
+      </header>
 
-          <p className="text-slate-300 text-lg md:text-xl max-w-3xl mb-8">
-            AI clinical workflow for doctors, nurses, pharmacists and
-            pharmacy-first consultations. Turn consultations into SOAP notes,
-            ICD-10 suggestions, referrals, prescription drafts and patient
-            summaries.
-          </p>
+      <section className="max-w-6xl mx-auto px-4 py-10">
+        <div className="grid lg:grid-cols-2 gap-8 items-center">
+          <div>
+            <span className="inline-block bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-semibold mb-4">
+              AI clinical operating system
+            </span>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-            <Link className="rounded-xl bg-emerald-500 text-slate-950 font-bold p-4 text-center" href="/login">
-              Doctor Login
-            </Link>
+            <h2 className="text-4xl md:text-5xl font-bold text-slate-900 leading-tight mb-4">
+              One consultation.
+              <br />
+              Multiple clinical outputs.
+            </h2>
 
-            <Link className="rounded-xl bg-blue-500 text-white font-bold p-4 text-center" href="/consultations/new">
-              Start Consultation
-            </Link>
+            <p className="text-lg text-slate-600 mb-6">
+              Turn doctor, nurse and pharmacy-first consultations into SOAP
+              notes, ICD-10 suggestions, referrals, prescription drafts and
+              patient summaries.
+            </p>
 
-            <Link className="rounded-xl bg-slate-700 text-white font-bold p-4 text-center" href="/patients">
-              Search / Register Patient
-            </Link>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Link
+                href="/consultations/new"
+                className="bg-blue-600 text-white px-5 py-3 rounded-xl font-bold text-center"
+              >
+                Start Consultation
+              </Link>
 
-            <Link className="rounded-xl border border-slate-600 text-white font-bold p-4 text-center" href="/dashboard">
-              Dashboard
-            </Link>
+              <Link
+                href="/patients"
+                className="bg-white text-slate-900 border border-slate-300 px-5 py-3 rounded-xl font-bold text-center"
+              >
+                Search / Register Patient
+              </Link>
+
+              <Link
+                href="/dashboard"
+                className="bg-slate-900 text-white px-5 py-3 rounded-xl font-bold text-center"
+              >
+                Dashboard
+              </Link>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+            <h3 className="text-xl font-bold text-slate-900 mb-4">
+              Clinical Workflow
+            </h3>
+
+            <div className="grid gap-3">
+              {[
+                "Patient Search",
+                "AI Consent",
+                "Voice Recording",
+                "Live Transcript",
+                "SOAP Note",
+                "ICD-10 Coding",
+                "Prescription Draft",
+                "Referral Letter",
+                "Patient Education",
+              ].map((item, index) => (
+                <div
+                  key={item}
+                  className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3"
+                >
+                  <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">
+                    {index + 1}
+                  </div>
+                  <p className="font-semibold text-slate-800">{item}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        <section className="mt-8">
-          <h2 className="text-2xl md:text-4xl font-bold mb-5">
-            One Consultation → Multiple Outputs
-          </h2>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {steps.map((step, index) => (
-              <div
-                key={step}
-                className="rounded-2xl bg-slate-900 border border-slate-700 p-5"
-              >
-                <div className="text-emerald-400 text-sm font-bold mb-2">
-                  Step {index + 1}
-                </div>
-                <div className="text-xl font-semibold">{step}</div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <div className="grid md:grid-cols-3 gap-4 mt-10">
+          <FeatureCard
+            title="Doctors"
+            text="Register clinician profiles and generate structured consultation notes."
+          />
+          <FeatureCard
+            title="Patients"
+            text="Capture patient demographics, allergies, medicines and consent."
+          />
+          <FeatureCard
+            title="Pharmacy First"
+            text="Support triage, prescribing workflows, referral letters and follow-up."
+          />
+        </div>
       </section>
     </main>
+  );
+}
+
+function FeatureCard({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+      <h3 className="text-lg font-bold text-slate-900 mb-2">{title}</h3>
+      <p className="text-slate-600">{text}</p>
+    </div>
   );
 }
