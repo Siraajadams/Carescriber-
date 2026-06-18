@@ -19,7 +19,7 @@ export default function LoginPage() {
     setLoading(true);
 
     const { error } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim(),
       password,
     });
 
@@ -34,62 +34,137 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-10">
-      <div className="mx-auto max-w-md rounded-3xl bg-white p-8 shadow-xl">
-        <Link href="/" className="text-sm font-semibold text-blue-700">
+    <main style={styles.page}>
+      <section style={styles.card}>
+        <Link href="/" style={styles.backLink}>
           ← Back to CareScriber
         </Link>
 
-        <p className="mt-6 text-sm font-semibold text-blue-700">
-          Videomed Clinical Assistant
+        <p style={styles.label}>Videomed Clinical Assistant</p>
+
+        <h1 style={styles.title}>Doctor Login</h1>
+
+        <p style={styles.subtitle}>
+          Login to access consultations, patient records and AI clinical notes.
         </p>
 
-        <h1 className="mt-2 text-3xl font-bold text-slate-900">
-          Doctor Login
-        </h1>
-
-        <p className="mt-3 text-slate-600">
-          Login to access consultations and patient records.
-        </p>
-
-        <form onSubmit={loginDoctor} className="mt-6 grid gap-4">
+        <form onSubmit={loginDoctor} style={styles.form}>
           <input
+            style={styles.input}
             type="email"
-            className="rounded-xl border border-slate-300 px-4 py-3"
             placeholder="Email address"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
 
           <input
+            style={styles.input}
             type="password"
-            className="rounded-xl border border-slate-300 px-4 py-3"
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
 
-          {message && (
-            <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
-              {message}
-            </div>
-          )}
+          {message && <div style={styles.error}>{message}</div>}
 
-          <button
-            disabled={loading}
-            className="rounded-xl bg-blue-700 px-6 py-4 font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
-          >
-            {loading ? "Logging in..." : "Login"}
+          <button disabled={loading} style={styles.button}>
+            {loading ? "Logging in..." : "Doctor Login"}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-slate-600">
+        <p style={styles.footer}>
           Not registered yet?{" "}
-          <Link href="/register" className="font-semibold text-blue-700">
+          <Link href="/register" style={styles.link}>
             Register as Doctor
           </Link>
         </p>
-      </div>
+      </section>
     </main>
   );
 }
+
+const styles: { [key: string]: React.CSSProperties } = {
+  page: {
+    minHeight: "100vh",
+    background: "#f1f5f9",
+    padding: "24px",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    fontFamily: "Arial, sans-serif",
+  },
+  card: {
+    width: "100%",
+    maxWidth: "620px",
+    background: "#ffffff",
+    borderRadius: "28px",
+    padding: "36px",
+    boxShadow: "0 20px 45px rgba(15, 23, 42, 0.14)",
+  },
+  backLink: {
+    color: "#2563eb",
+    fontWeight: 700,
+    textDecoration: "none",
+    fontSize: "16px",
+  },
+  label: {
+    marginTop: "32px",
+    color: "#2563eb",
+    fontWeight: 700,
+    fontSize: "17px",
+  },
+  title: {
+    fontSize: "48px",
+    lineHeight: "54px",
+    color: "#0f172a",
+    marginTop: "16px",
+    marginBottom: "18px",
+  },
+  subtitle: {
+    color: "#475569",
+    fontSize: "21px",
+    lineHeight: "30px",
+  },
+  form: {
+    display: "grid",
+    gap: "16px",
+    marginTop: "32px",
+  },
+  input: {
+    width: "100%",
+    padding: "18px",
+    borderRadius: "16px",
+    border: "1px solid #cbd5e1",
+    fontSize: "18px",
+    boxSizing: "border-box",
+  },
+  error: {
+    background: "#fee2e2",
+    color: "#991b1b",
+    padding: "16px",
+    borderRadius: "16px",
+    fontWeight: 700,
+  },
+  button: {
+    width: "100%",
+    padding: "18px",
+    borderRadius: "16px",
+    border: "none",
+    background: "#2563eb",
+    color: "#ffffff",
+    fontSize: "18px",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  footer: {
+    marginTop: "28px",
+    textAlign: "center",
+    color: "#475569",
+    fontSize: "17px",
+  },
+  link: {
+    color: "#2563eb",
+    fontWeight: 700,
+    textDecoration: "none",
+  },
+};
