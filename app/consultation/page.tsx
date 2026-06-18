@@ -22,6 +22,7 @@ export default function ConsultationPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     checkLogin();
@@ -67,20 +68,35 @@ export default function ConsultationPage() {
       setMessage("");
       chunksRef.current = [];
 
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMessage("Audio recording is not supported on this browser.");
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const recorder = new MediaRecorder(stream);
+      let recorder: MediaRecorder;
+
+      if (MediaRecorder.isTypeSupported("audio/webm")) {
+        recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+        recorder = new MediaRecorder(stream, { mimeType: "audio/mp4" });
+      } else {
+        recorder = new MediaRecorder(stream);
+      }
+
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data && event.data.size > 0) {
           chunksRef.current.push(event.data);
         }
       };
 
       recorder.onstop = async () => {
         await transcribeRecording();
+
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       };
@@ -89,7 +105,9 @@ export default function ConsultationPage() {
       setIsRecording(true);
       setMessage("Recording started. Speak clearly near the device.");
     } catch {
-      setMessage("Microphone permission denied or recording is not supported.");
+      setMessage(
+        "Microphone permission denied or recording is not supported on this device."
+      );
     }
   }
 
@@ -107,7 +125,11 @@ export default function ConsultationPage() {
 
   async function transcribeRecording() {
     try {
-      const audioBlob = new Blob(chunksRef.current, { type: "audio/webm" });
+      const mimeType =
+        chunksRef.current[0]?.type ||
+        (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
+
+      const audioBlob = new Blob(chunksRef.current, { type: mimeType });
 
       if (audioBlob.size === 0) {
         setMessage("No audio captured. Please try again.");
@@ -115,8 +137,10 @@ export default function ConsultationPage() {
         return;
       }
 
+      const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+
       const formData = new FormData();
-      formData.append("audio", audioBlob, "consultation.webm");
+      formData.append("audio", audioBlob, `consultation.${extension}`);
 
       const response = await fetch("/api/transcribe", {
         method: "POST",
@@ -190,14 +214,41 @@ export default function ConsultationPage() {
   async function saveConsultation() {
     setMessage("");
 
+    if (isSaving) return;
+
+    if (!patientId) {
+      setMessage("Please select a patient before saving the consultation.");
+      return;
+    }
+
+    if (!transcript.trim() && !soapNote.trim()) {
+      setMessage("Please capture a transcript or generate a SOAP note before saving.");
+      return;
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setMessage("Your login session expired. Please login again.");
+      router.push("/login");
+      return;
+    }
+
+    setIsSaving(true);
+
     const { error } = await supabase.from("consultations").insert({
-      patient_id: patientId || null,
-      transcript,
-      soap_note: soapNote,
-      patient_summary: summary,
+      patient_id: patientId,
+      transcript: transcript.trim(),
+      soap_note: soapNote.trim(),
+      patient_summary: summary.trim(),
       status: "completed",
       created_at: new Date().toISOString(),
     });
+
+    setIsSaving(false);
 
     if (error) {
       setMessage(error.message);
@@ -245,6 +296,16 @@ export default function ConsultationPage() {
             Select Patient
           </Link>
         </div>
+
+        {isRecording && (
+          <div style={styles.recordingBox}>Recording in progress...</div>
+        )}
+
+        {isTranscribing && (
+          <div style={styles.message}>
+            Processing audio and creating transcript...
+          </div>
+        )}
 
         {message && <div style={styles.message}>{message}</div>}
 
@@ -310,8 +371,15 @@ export default function ConsultationPage() {
             {isGenerating ? "Generating..." : "Generate SOAP / ICD-10"}
           </button>
 
-          <button onClick={saveConsultation} style={styles.dark}>
-            Save Consultation
+          <button
+            onClick={saveConsultation}
+            disabled={isSaving}
+            style={{
+              ...styles.dark,
+              opacity: isSaving ? 0.6 : 1,
+            }}
+          >
+            {isSaving ? "Saving..." : "Save Consultation"}
           </button>
         </div>
       </div>
@@ -405,6 +473,14 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: 16,
     textDecoration: "none",
     fontSize: 17,
+    fontWeight: 700,
+  },
+  recordingBox: {
+    marginTop: 20,
+    background: "#dcfce7",
+    color: "#166534",
+    padding: 16,
+    borderRadius: 16,
     fontWeight: 700,
   },
   message: {
