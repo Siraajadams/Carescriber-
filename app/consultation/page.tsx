@@ -12,13 +12,18 @@ export default function ConsultationPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
+  const [consultationId, setConsultationId] = useState("");
+  const [savedAt, setSavedAt] = useState("");
   const [patientId, setPatientId] = useState("");
   const [patientName, setPatientName] = useState("No patient selected");
+
   const [transcript, setTranscript] = useState("");
   const [soapNote, setSoapNote] = useState("");
   const [summary, setSummary] = useState("");
+
   const [activeTab, setActiveTab] = useState("transcript");
   const [message, setMessage] = useState("");
+
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -28,11 +33,14 @@ export default function ConsultationPage() {
     checkLogin();
 
     const params = new URLSearchParams(window.location.search);
-    const id = params.get("patient");
+    const patient = params.get("patient");
+    const consultation = params.get("consultation");
 
-    if (id) {
-      setPatientId(id);
-      loadPatient(id);
+    if (consultation) {
+      loadConsultation(consultation);
+    } else if (patient) {
+      setPatientId(patient);
+      loadPatient(patient);
     }
   }, []);
 
@@ -41,9 +49,7 @@ export default function ConsultationPage() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    if (!user) {
-      router.push("/login");
-    }
+    if (!user) router.push("/login");
   }
 
   async function loadPatient(id: string) {
@@ -59,7 +65,38 @@ export default function ConsultationPage() {
     }
 
     if (data) {
-      setPatientName(`${data.first_name || ""} ${data.last_name || ""}`.trim());
+      const name = `${data.first_name || ""} ${
+        data.surname || data.last_name || ""
+      }`.trim();
+
+      setPatientName(name || "Patient selected");
+    }
+  }
+
+  async function loadConsultation(id: string) {
+    const { data, error } = await supabase
+      .from("consultations")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    if (!data) return;
+
+    setConsultationId(data.id);
+    setPatientId(data.patient_id || "");
+    setTranscript(data.transcript || "");
+    setSoapNote(data.soap_note || "");
+    setSummary(data.patient_summary || "");
+    setSavedAt(data.created_at || "");
+    setMessage("Saved consultation loaded.");
+
+    if (data.patient_id) {
+      await loadPatient(data.patient_id);
     }
   }
 
@@ -96,18 +133,15 @@ export default function ConsultationPage() {
 
       recorder.onstop = async () => {
         await transcribeRecording();
-
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       };
 
-      recorder.start();
+      recorder.start(1000);
       setIsRecording(true);
-      setMessage("Recording started. Speak clearly near the device.");
+      setMessage("Recording started.");
     } catch {
-      setMessage(
-        "Microphone permission denied or recording is not supported on this device."
-      );
+      setMessage("Microphone permission denied or not supported.");
     }
   }
 
@@ -120,14 +154,16 @@ export default function ConsultationPage() {
     recorderRef.current.stop();
     setIsRecording(false);
     setIsTranscribing(true);
-    setMessage("Recording stopped. Transcribing now...");
+    setMessage("Recording stopped. Transcribing...");
   }
 
   async function transcribeRecording() {
     try {
       const mimeType =
         chunksRef.current[0]?.type ||
-        (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4");
+        (MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "audio/mp4");
 
       const audioBlob = new Blob(chunksRef.current, { type: mimeType });
 
@@ -154,17 +190,14 @@ export default function ConsultationPage() {
         return;
       }
 
-      if (result.text) {
-        setTranscript((prev) =>
-          prev ? `${prev}\n\n${result.text}` : result.text
-        );
-        setActiveTab("transcript");
-        setMessage("Transcription completed. Please review before generating SOAP.");
-      } else {
-        setMessage("No transcript returned.");
-      }
+      setTranscript((prev) =>
+        prev ? `${prev}\n\n${result.text || ""}` : result.text || ""
+      );
+
+      setActiveTab("transcript");
+      setMessage("Transcription completed.");
     } catch {
-      setMessage("Transcription failed. Please check OpenAI setup.");
+      setMessage("Transcription failed.");
     } finally {
       setIsTranscribing(false);
     }
@@ -172,23 +205,18 @@ export default function ConsultationPage() {
 
   async function generateSoap() {
     if (!transcript.trim()) {
-      setMessage("Please add transcript before generating SOAP note.");
+      setMessage("Please add transcript before generating SOAP.");
       return;
     }
 
     try {
       setIsGenerating(true);
-      setMessage("Generating SOAP, ICD-10, treatment plan and safety-netting...");
+      setMessage("Generating SOAP and ICD-10...");
 
       const response = await fetch("/api/generate-clinical-note", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          transcript,
-          patientName,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript, patientName }),
       });
 
       const result = await response.json();
@@ -198,14 +226,15 @@ export default function ConsultationPage() {
         return;
       }
 
-      const clinicalNote = result.clinicalNote || "";
+      const note = result.clinicalNote || "";
+      const generatedSummary = `Patient: ${patientName}\nDate: ${new Date().toLocaleString()}\n\nClinical summary generated for doctor review.`;
 
-      setSoapNote(clinicalNote);
-      setSummary(`${patientName} clinical note generated for doctor review.`);
+      setSoapNote(note);
+      setSummary(generatedSummary);
       setActiveTab("soap");
-      setMessage("SOAP, ICD-10 and treatment plan generated. Please review.");
+      setMessage("SOAP / ICD-10 generated.");
     } catch {
-      setMessage("Clinical note generation failed. Please check OpenAI setup.");
+      setMessage("Clinical note generation failed.");
     } finally {
       setIsGenerating(false);
     }
@@ -214,39 +243,39 @@ export default function ConsultationPage() {
   async function saveConsultation() {
     setMessage("");
 
-    if (isSaving) return;
-
     if (!patientId) {
-      setMessage("Please select a patient before saving the consultation.");
+      setMessage("Please select a patient before saving.");
       return;
     }
 
-    if (!transcript.trim() && !soapNote.trim()) {
-      setMessage("Please capture a transcript or generate a SOAP note before saving.");
-      return;
-    }
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      setMessage("Your login session expired. Please login again.");
-      router.push("/login");
+    if (!transcript.trim() && !soapNote.trim() && !summary.trim()) {
+      setMessage("Please capture consultation content before saving.");
       return;
     }
 
     setIsSaving(true);
 
-    const { error } = await supabase.from("consultations").insert({
+    const payload = {
       patient_id: patientId,
       transcript: transcript.trim(),
       soap_note: soapNote.trim(),
       patient_summary: summary.trim(),
       status: "completed",
       created_at: new Date().toISOString(),
-    });
+    };
+
+    const { data, error } = consultationId
+      ? await supabase
+          .from("consultations")
+          .update(payload)
+          .eq("id", consultationId)
+          .select()
+          .single()
+      : await supabase
+          .from("consultations")
+          .insert(payload)
+          .select()
+          .single();
 
     setIsSaving(false);
 
@@ -255,7 +284,56 @@ export default function ConsultationPage() {
       return;
     }
 
-    setMessage("Consultation saved successfully.");
+    if (data) {
+      setConsultationId(data.id);
+      setSavedAt(data.created_at);
+      setMessage("Consultation saved with date stamp.");
+    }
+  }
+
+  function printPdfSummary() {
+    const dateText = savedAt
+      ? new Date(savedAt).toLocaleString()
+      : new Date().toLocaleString();
+
+    const html = `
+      <html>
+        <head>
+          <title>CareScriber Consultation Summary</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 32px; color: #0f172a; }
+            h1 { font-size: 28px; }
+            h2 { margin-top: 28px; font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+            pre { white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.5; }
+          </style>
+        </head>
+        <body>
+          <h1>CareScriber Consultation Summary</h1>
+          <p><strong>Patient:</strong> ${patientName}</p>
+          <p><strong>Date stamped:</strong> ${dateText}</p>
+
+          <h2>Patient Summary</h2>
+          <pre>${summary || "No summary captured."}</pre>
+
+          <h2>SOAP / ICD-10</h2>
+          <pre>${soapNote || "No SOAP note captured."}</pre>
+
+          <h2>Transcript</h2>
+          <pre>${transcript || "No transcript captured."}</pre>
+        </body>
+      </html>
+    `;
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      setMessage("Popup blocked. Please allow popups to create PDF.");
+      return;
+    }
+
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
   }
 
   return (
@@ -265,30 +343,24 @@ export default function ConsultationPage() {
           ← Back to Dashboard
         </Link>
 
-        <h1 style={styles.title}>New Consultation</h1>
+        <h1 style={styles.title}>
+          {consultationId ? "Saved Consultation" : "New Consultation"}
+        </h1>
 
         <p style={styles.subtitle}>Patient: {patientName}</p>
 
+        {savedAt && (
+          <p style={styles.dateStamp}>
+            Date stamped: {new Date(savedAt).toLocaleString()}
+          </p>
+        )}
+
         <div style={styles.actions}>
-          <button
-            onClick={startRecording}
-            disabled={isRecording || isTranscribing}
-            style={{
-              ...styles.green,
-              opacity: isRecording || isTranscribing ? 0.6 : 1,
-            }}
-          >
+          <button onClick={startRecording} disabled={isRecording} style={styles.green}>
             🎤 Start Recording
           </button>
 
-          <button
-            onClick={stopRecording}
-            disabled={!isRecording}
-            style={{
-              ...styles.red,
-              opacity: !isRecording ? 0.6 : 1,
-            }}
-          >
+          <button onClick={stopRecording} disabled={!isRecording} style={styles.red}>
             ⏹ Stop Recording
           </button>
 
@@ -297,89 +369,43 @@ export default function ConsultationPage() {
           </Link>
         </div>
 
-        {isRecording && (
-          <div style={styles.recordingBox}>Recording in progress...</div>
-        )}
-
-        {isTranscribing && (
-          <div style={styles.message}>
-            Processing audio and creating transcript...
-          </div>
-        )}
-
         {message && <div style={styles.message}>{message}</div>}
 
         <div style={styles.tabs}>
-          <button
-            onClick={() => setActiveTab("transcript")}
-            style={activeTab === "transcript" ? styles.activeTab : styles.tab}
-          >
+          <button onClick={() => setActiveTab("transcript")} style={activeTab === "transcript" ? styles.activeTab : styles.tab}>
             Transcript
           </button>
-
-          <button
-            onClick={() => setActiveTab("soap")}
-            style={activeTab === "soap" ? styles.activeTab : styles.tab}
-          >
+          <button onClick={() => setActiveTab("soap")} style={activeTab === "soap" ? styles.activeTab : styles.tab}>
             SOAP / ICD-10
           </button>
-
-          <button
-            onClick={() => setActiveTab("summary")}
-            style={activeTab === "summary" ? styles.activeTab : styles.tab}
-          >
+          <button onClick={() => setActiveTab("summary")} style={activeTab === "summary" ? styles.activeTab : styles.tab}>
             Summary
           </button>
         </div>
 
         {activeTab === "transcript" && (
-          <textarea
-            style={styles.textarea}
-            placeholder="Transcript will appear here after recording..."
-            value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
-          />
+          <textarea style={styles.textarea} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="Transcript will appear here..." />
         )}
 
         {activeTab === "soap" && (
-          <textarea
-            style={styles.textarea}
-            placeholder="SOAP, ICD-10 and treatment plan will appear here..."
-            value={soapNote}
-            onChange={(e) => setSoapNote(e.target.value)}
-          />
+          <textarea style={styles.textarea} value={soapNote} onChange={(e) => setSoapNote(e.target.value)} placeholder="SOAP / ICD-10 will appear here..." />
         )}
 
         {activeTab === "summary" && (
-          <textarea
-            style={styles.textarea}
-            placeholder="Patient summary will appear here..."
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-          />
+          <textarea style={styles.textarea} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="Summary will appear here..." />
         )}
 
         <div style={styles.actions}>
-          <button
-            onClick={generateSoap}
-            disabled={isGenerating}
-            style={{
-              ...styles.blue,
-              opacity: isGenerating ? 0.6 : 1,
-            }}
-          >
+          <button onClick={generateSoap} disabled={isGenerating} style={styles.blue}>
             {isGenerating ? "Generating..." : "Generate SOAP / ICD-10"}
           </button>
 
-          <button
-            onClick={saveConsultation}
-            disabled={isSaving}
-            style={{
-              ...styles.dark,
-              opacity: isSaving ? 0.6 : 1,
-            }}
-          >
+          <button onClick={saveConsultation} disabled={isSaving} style={styles.dark}>
             {isSaving ? "Saving..." : "Save Consultation"}
+          </button>
+
+          <button onClick={printPdfSummary} style={styles.pdf}>
+            Download PDF Summary
           </button>
         </div>
       </div>
@@ -406,11 +432,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: "#2563eb",
     fontWeight: 700,
     textDecoration: "none",
-    fontSize: 16,
   },
   title: {
     fontSize: 46,
-    lineHeight: "52px",
     color: "#0f172a",
     marginTop: 28,
     marginBottom: 16,
@@ -418,7 +442,13 @@ const styles: { [key: string]: React.CSSProperties } = {
   subtitle: {
     color: "#475569",
     fontSize: 22,
-    lineHeight: "32px",
+  },
+  dateStamp: {
+    background: "#ecfeff",
+    color: "#155e75",
+    padding: 12,
+    borderRadius: 12,
+    fontWeight: 700,
   },
   actions: {
     display: "flex",
@@ -428,43 +458,43 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   green: {
     background: "#16a34a",
-    color: "#ffffff",
+    color: "#fff",
     padding: "16px 24px",
     borderRadius: 16,
     border: 0,
-    fontSize: 17,
     fontWeight: 700,
-    cursor: "pointer",
   },
   red: {
     background: "#dc2626",
-    color: "#ffffff",
+    color: "#fff",
     padding: "16px 24px",
     borderRadius: 16,
     border: 0,
-    fontSize: 17,
     fontWeight: 700,
-    cursor: "pointer",
   },
   blue: {
     background: "#2563eb",
-    color: "#ffffff",
+    color: "#fff",
     padding: "16px 24px",
     borderRadius: 16,
     border: 0,
-    fontSize: 17,
     fontWeight: 700,
-    cursor: "pointer",
   },
   dark: {
     background: "#0f172a",
-    color: "#ffffff",
+    color: "#fff",
     padding: "16px 24px",
     borderRadius: 16,
     border: 0,
-    fontSize: 17,
     fontWeight: 700,
-    cursor: "pointer",
+  },
+  pdf: {
+    background: "#9333ea",
+    color: "#fff",
+    padding: "16px 24px",
+    borderRadius: 16,
+    border: 0,
+    fontWeight: 700,
   },
   outline: {
     border: "2px solid #2563eb",
@@ -472,15 +502,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     padding: "14px 22px",
     borderRadius: 16,
     textDecoration: "none",
-    fontSize: 17,
-    fontWeight: 700,
-  },
-  recordingBox: {
-    marginTop: 20,
-    background: "#dcfce7",
-    color: "#166534",
-    padding: 16,
-    borderRadius: 16,
     fontWeight: 700,
   },
   message: {
@@ -498,23 +519,19 @@ const styles: { [key: string]: React.CSSProperties } = {
     marginTop: 28,
   },
   tab: {
-    padding: "16px 12px",
+    padding: 16,
     borderRadius: 16,
     border: "1px solid #cbd5e1",
     background: "#f8fafc",
-    fontSize: 16,
     fontWeight: 700,
-    cursor: "pointer",
   },
   activeTab: {
-    padding: "16px 12px",
+    padding: 16,
     borderRadius: 16,
     border: "2px solid #2563eb",
     background: "#eff6ff",
     color: "#2563eb",
-    fontSize: 16,
     fontWeight: 700,
-    cursor: "pointer",
   },
   textarea: {
     width: "100%",
