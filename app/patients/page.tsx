@@ -8,7 +8,7 @@ import { supabase } from "../../lib/supabaseClient";
 type Patient = {
   id: string;
   first_name: string;
-  surname: string;
+  last_name: string;
   patient_id?: string;
   gender?: string;
   mobile?: string;
@@ -20,6 +20,7 @@ export default function PatientsPage() {
   const [search, setSearch] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const [firstName, setFirstName] = useState("");
   const [surname, setSurname] = useState("");
@@ -49,8 +50,9 @@ export default function PatientsPage() {
       .limit(20);
 
     if (search.trim()) {
+      const term = search.trim();
       query = query.or(
-        `first_name.ilike.%${search}%,surname.ilike.%${search}%,patient_id.ilike.%${search}%,mobile.ilike.%${search}%`
+        `first_name.ilike.%${term}%,last_name.ilike.%${term}%,patient_id.ilike.%${term}%,mobile.ilike.%${term}%`
       );
     }
 
@@ -68,26 +70,51 @@ export default function PatientsPage() {
     e.preventDefault();
     setMessage("");
 
-    if (!firstName || !surname) {
+    if (saving) return;
+
+    if (!firstName.trim() || !surname.trim()) {
       setMessage("Please enter patient first name and surname.");
       return;
     }
 
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setMessage("Your login session expired. Please login again.");
+      router.push("/login");
+      return;
+    }
+
+    setSaving(true);
+
+    const generatedPatientId =
+      patientId.trim() || `PT-${Math.floor(100000 + Math.random() * 900000)}`;
+
     const { data, error } = await supabase
-  .from("patients")
-  .insert({
-    first_name: firstName,
-    last_name: surname,
-    patient_id: patientId || `PT-${Math.floor(100000 + Math.random() * 900000)}`,
-    gender,
-    mobile,
-    created_at: new Date().toISOString(),
-  })
-  .select()
-  .single();
+      .from("patients")
+      .insert({
+        first_name: firstName.trim(),
+        last_name: surname.trim(),
+        patient_id: generatedPatientId,
+        gender,
+        mobile: mobile.trim(),
+        created_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    setSaving(false);
 
     if (error) {
       setMessage(error.message);
+      return;
+    }
+
+    if (!data?.id) {
+      setMessage("Patient was not saved. Please try again.");
       return;
     }
 
@@ -126,10 +153,12 @@ export default function PatientsPage() {
           {patients.map((patient) => (
             <div key={patient.id} style={styles.patientCard}>
               <strong>
-                {patient.first_name} {patient.surname}
+                {patient.first_name} {patient.last_name}
               </strong>
+
               <p style={styles.patientText}>
-                {patient.patient_id || "No ID"} · {patient.gender || "No gender"} ·{" "}
+                {patient.patient_id || "No ID"} ·{" "}
+                {patient.gender || "No gender"} ·{" "}
                 {patient.mobile || "No mobile"}
               </p>
 
@@ -186,8 +215,8 @@ export default function PatientsPage() {
 
           {message && <div style={styles.error}>{message}</div>}
 
-          <button type="submit" style={styles.button}>
-            Save Patient & Start Consultation
+          <button type="submit" disabled={saving} style={styles.button}>
+            {saving ? "Saving..." : "Save Patient & Start Consultation"}
           </button>
         </form>
       </section>
