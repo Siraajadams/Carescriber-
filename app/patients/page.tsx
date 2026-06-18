@@ -77,10 +77,10 @@ export default function PatientsPage() {
   .from("patients")
   .insert({
     first_name: firstName,
-    surname,
+    last_name: surname,
     patient_id: patientId || `PT-${Math.floor(100000 + Math.random() * 900000)}`,
     gender,
-    mobile_number: mobile,
+    mobile,
     created_at: new Date().toISOString(),
   })
   .select()
