@@ -126,7 +126,7 @@ export default function PrivacyPage() {
       </h2>
 
       <p className="mb-2">
-        Email: privacy@carescriber.com
+        Email: info@carescriber.com
       </p>
 
       <p className="mb-2">
