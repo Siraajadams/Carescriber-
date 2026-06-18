@@ -21,6 +21,7 @@ export default function ConsultationPage() {
   const [message, setMessage] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
     checkLogin();
@@ -69,10 +70,7 @@ export default function ConsultationPage() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const recorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm",
-      });
-
+      const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (event) => {
@@ -83,7 +81,6 @@ export default function ConsultationPage() {
 
       recorder.onstop = async () => {
         await transcribeRecording();
-
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       };
@@ -91,10 +88,8 @@ export default function ConsultationPage() {
       recorder.start();
       setIsRecording(true);
       setMessage("Recording started. Speak clearly near the device.");
-    } catch (error) {
-      setMessage(
-        "Microphone permission denied or recording is not supported on this device."
-      );
+    } catch {
+      setMessage("Microphone permission denied or recording is not supported.");
     }
   }
 
@@ -112,9 +107,7 @@ export default function ConsultationPage() {
 
   async function transcribeRecording() {
     try {
-      const audioBlob = new Blob(chunksRef.current, {
-        type: "audio/webm",
-      });
+      const audioBlob = new Blob(chunksRef.current, { type: "audio/webm" });
 
       if (audioBlob.size === 0) {
         setMessage("No audio captured. Please try again.");
@@ -134,7 +127,6 @@ export default function ConsultationPage() {
 
       if (!response.ok) {
         setMessage(result.error || "Transcription failed.");
-        setIsTranscribing(false);
         return;
       }
 
@@ -143,41 +135,56 @@ export default function ConsultationPage() {
           prev ? `${prev}\n\n${result.text}` : result.text
         );
         setActiveTab("transcript");
-        setMessage("Transcription completed. Please review the transcript.");
+        setMessage("Transcription completed. Please review before generating SOAP.");
       } else {
         setMessage("No transcript returned.");
       }
-    } catch (error) {
+    } catch {
       setMessage("Transcription failed. Please check OpenAI setup.");
     } finally {
       setIsTranscribing(false);
     }
   }
 
-  function generateSoap() {
+  async function generateSoap() {
     if (!transcript.trim()) {
       setMessage("Please add transcript before generating SOAP note.");
       return;
     }
 
-    setSoapNote(`Subjective:
-${transcript}
+    try {
+      setIsGenerating(true);
+      setMessage("Generating SOAP, ICD-10, treatment plan and safety-netting...");
 
-Objective:
-Not recorded.
+      const response = await fetch("/api/generate-clinical-note", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          transcript,
+          patientName,
+        }),
+      });
 
-Assessment:
-Doctor to review and confirm clinical assessment.
+      const result = await response.json();
 
-Plan:
-Doctor to complete plan, medication, referral or follow-up.`);
+      if (!response.ok) {
+        setMessage(result.error || "Clinical note generation failed.");
+        return;
+      }
 
-    setSummary(
-      `${patientName} was seen for a consultation. Transcript captured and SOAP note generated for doctor review.`
-    );
+      const clinicalNote = result.clinicalNote || "";
 
-    setActiveTab("soap");
-    setMessage("SOAP note generated. Please review before saving.");
+      setSoapNote(clinicalNote);
+      setSummary(`${patientName} clinical note generated for doctor review.`);
+      setActiveTab("soap");
+      setMessage("SOAP, ICD-10 and treatment plan generated. Please review.");
+    } catch {
+      setMessage("Clinical note generation failed. Please check OpenAI setup.");
+    } finally {
+      setIsGenerating(false);
+    }
   }
 
   async function saveConsultation() {
@@ -239,26 +246,12 @@ Doctor to complete plan, medication, referral or follow-up.`);
           </Link>
         </div>
 
-        {isRecording && (
-          <div style={styles.recordingBox}>
-            Recording in progress...
-          </div>
-        )}
-
-        {isTranscribing && (
-          <div style={styles.message}>
-            Processing audio and creating transcript...
-          </div>
-        )}
-
         {message && <div style={styles.message}>{message}</div>}
 
         <div style={styles.tabs}>
           <button
             onClick={() => setActiveTab("transcript")}
-            style={
-              activeTab === "transcript" ? styles.activeTab : styles.tab
-            }
+            style={activeTab === "transcript" ? styles.activeTab : styles.tab}
           >
             Transcript
           </button>
@@ -267,7 +260,7 @@ Doctor to complete plan, medication, referral or follow-up.`);
             onClick={() => setActiveTab("soap")}
             style={activeTab === "soap" ? styles.activeTab : styles.tab}
           >
-            SOAP Note
+            SOAP / ICD-10
           </button>
 
           <button
@@ -281,7 +274,7 @@ Doctor to complete plan, medication, referral or follow-up.`);
         {activeTab === "transcript" && (
           <textarea
             style={styles.textarea}
-            placeholder="Transcript will appear here after recording. You can also type or paste transcript text here..."
+            placeholder="Transcript will appear here after recording..."
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
           />
@@ -290,7 +283,7 @@ Doctor to complete plan, medication, referral or follow-up.`);
         {activeTab === "soap" && (
           <textarea
             style={styles.textarea}
-            placeholder="SOAP note will appear here..."
+            placeholder="SOAP, ICD-10 and treatment plan will appear here..."
             value={soapNote}
             onChange={(e) => setSoapNote(e.target.value)}
           />
@@ -306,8 +299,15 @@ Doctor to complete plan, medication, referral or follow-up.`);
         )}
 
         <div style={styles.actions}>
-          <button onClick={generateSoap} style={styles.blue}>
-            Generate SOAP
+          <button
+            onClick={generateSoap}
+            disabled={isGenerating}
+            style={{
+              ...styles.blue,
+              opacity: isGenerating ? 0.6 : 1,
+            }}
+          >
+            {isGenerating ? "Generating..." : "Generate SOAP / ICD-10"}
           </button>
 
           <button onClick={saveConsultation} style={styles.dark}>
@@ -405,14 +405,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: 16,
     textDecoration: "none",
     fontSize: 17,
-    fontWeight: 700,
-  },
-  recordingBox: {
-    marginTop: 20,
-    background: "#dcfce7",
-    color: "#166534",
-    padding: 16,
-    borderRadius: 16,
     fontWeight: 700,
   },
   message: {
