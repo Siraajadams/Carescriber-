@@ -18,6 +18,9 @@ export default function RegisterDoctorPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -113,22 +116,55 @@ export default function RegisterDoctorPage() {
           </select>
 
           <div style={styles.grid}>
-  <input
-    style={styles.input}
-    type="password"
-    placeholder="Password *"
-    value={password}
-    onChange={(e) => setPassword(e.target.value)}
-  />
+            <div style={styles.passwordWrap}>
+              <input
+                style={styles.passwordInput}
+                type={showPassword ? "text" : "password"}
+                placeholder="Password *"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
 
-  <input
-    style={styles.input}
-    type="password"
-    placeholder="Confirm password *"
-    value={confirmPassword}
-    onChange={(e) => setConfirmPassword(e.target.value)}
-  />
-</div>
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={styles.eyeButton}
+              >
+                {showPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
+
+            <div style={styles.passwordWrap}>
+              <input
+                style={styles.passwordInput}
+                type={showConfirmPassword ? "text" : "password"}
+                placeholder="Confirm password *"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                style={styles.eyeButton}
+              >
+                {showConfirmPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
+          </div>
+
+          {message && <div style={styles.error}>{message}</div>}
+
+          <button type="submit" disabled={loading} style={styles.button}>
+            {loading ? "Registering..." : "Register Doctor"}
+          </button>
+        </form>
+
+        <p style={styles.footer}>
+          Already registered?{" "}
+          <Link href="/login" style={styles.link}>Login here</Link>
+        </p>
+      </div>
     </main>
   );
 }
@@ -189,6 +225,28 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: "1px solid #cbd5e1",
     fontSize: "16px",
     boxSizing: "border-box",
+  },
+  passwordWrap: {
+    position: "relative",
+    width: "100%",
+  },
+  passwordInput: {
+    width: "100%",
+    padding: "14px 52px 14px 16px",
+    borderRadius: "12px",
+    border: "1px solid #cbd5e1",
+    fontSize: "16px",
+    boxSizing: "border-box",
+  },
+  eyeButton: {
+    position: "absolute",
+    right: "14px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "18px",
   },
   error: {
     background: "#fee2e2",
