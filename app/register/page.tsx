@@ -113,22 +113,22 @@ export default function RegisterDoctorPage() {
           </select>
 
           <div style={styles.grid}>
-            <input style={styles.input} type="password" placeholder="Password *" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <input style={styles.input} type="password" placeholder="Confirm password *" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-          </div>
+  <input
+    style={styles.input}
+    type="password"
+    placeholder="Password *"
+    value={password}
+    onChange={(e) => setPassword(e.target.value)}
+  />
 
-          {message && <div style={styles.error}>{message}</div>}
-
-          <button type="submit" disabled={loading} style={styles.button}>
-            {loading ? "Registering..." : "Register Doctor"}
-          </button>
-        </form>
-
-        <p style={styles.footer}>
-          Already registered?{" "}
-          <Link href="/login" style={styles.link}>Login here</Link>
-        </p>
-      </div>
+  <input
+    style={styles.input}
+    type="password"
+    placeholder="Confirm password *"
+    value={confirmPassword}
+    onChange={(e) => setConfirmPassword(e.target.value)}
+  />
+</div>
     </main>
   );
 }
