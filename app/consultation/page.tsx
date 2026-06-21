@@ -1,547 +1,433 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import { useMemo, useRef, useState } from "react";
+
+type Patient = {
+  firstName: string;
+  surname: string;
+  idNumber: string;
+  age: string;
+  dob: string;
+  gender: string;
+  mobile: string;
+  medicalAid: string;
+  allergies: string;
+  currentMedicines: string;
+};
+
+const demoPatients: Patient[] = [
+  {
+    firstName: "Siraaj",
+    surname: "Adams",
+    idNumber: "8990",
+    age: "49",
+    dob: "1974-06-16",
+    gender: "Female",
+    mobile: "0827427073",
+    medicalAid: "Not captured",
+    allergies: "No known allergies",
+    currentMedicines: "Not captured",
+  },
+];
 
 export default function ConsultationPage() {
-  const router = useRouter();
+  const recognitionRef = useRef<any>(null);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-
-  const [consultationId, setConsultationId] = useState("");
-  const [savedAt, setSavedAt] = useState("");
-  const [patientId, setPatientId] = useState("");
-  const [patientName, setPatientName] = useState("No patient selected");
-
+  const [search, setSearch] = useState("");
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [consent, setConsent] = useState(false);
+  const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const [soapNote, setSoapNote] = useState("");
-  const [summary, setSummary] = useState("");
-
-  const [activeTab, setActiveTab] = useState("transcript");
+  const [clinicalNote, setClinicalNote] = useState("");
+  const [activeTab, setActiveTab] = useState<"transcript" | "soap" | "summary">(
+    "transcript"
+  );
   const [message, setMessage] = useState("");
 
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const filteredPatients = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return [];
 
-  useEffect(() => {
-    checkLogin();
+    return demoPatients.filter(
+      (p) =>
+        p.firstName.toLowerCase().includes(q) ||
+        p.surname.toLowerCase().includes(q) ||
+        p.idNumber.toLowerCase().includes(q)
+    );
+  }, [search]);
 
-    const params = new URLSearchParams(window.location.search);
-    const patient = params.get("patient");
-    const consultation = params.get("consultation");
+  function startRecording() {
+    setMessage("");
 
-    if (consultation) {
-      loadConsultation(consultation);
-    } else if (patient) {
-      setPatientId(patient);
-      loadPatient(patient);
-    }
-  }, []);
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
 
-  async function checkLogin() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) router.push("/login");
-  }
-
-  async function loadPatient(id: string) {
-    const { data, error } = await supabase
-      .from("patients")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error) {
-      setMessage(error.message);
+    if (!SpeechRecognition) {
+      setMessage(
+        "Microphone transcription is not supported on this browser. Please use Chrome, Edge, or Safari with microphone permission enabled."
+      );
       return;
     }
 
-    if (data) {
-      const name = `${data.first_name || ""} ${
-        data.surname || data.last_name || ""
-      }`.trim();
-
-      setPatientName(name || "Patient selected");
-    }
-  }
-
-  async function loadConsultation(id: string) {
-    const { data, error } = await supabase
-      .from("consultations")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error) {
-      setMessage(error.message);
+    if (!consent) {
+      setMessage("Please confirm AI consent before recording.");
       return;
     }
 
-    if (!data) return;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-ZA";
 
-    setConsultationId(data.id);
-    setPatientId(data.patient_id || "");
-    setTranscript(data.transcript || "");
-    setSoapNote(data.soap_note || "");
-    setSummary(data.patient_summary || "");
-    setSavedAt(data.created_at || "");
-    setMessage("Saved consultation loaded.");
+    let finalText = "";
 
-    if (data.patient_id) {
-      await loadPatient(data.patient_id);
-    }
-  }
+    recognition.onresult = (event: any) => {
+      let interimText = "";
 
-  async function startRecording() {
-    try {
-      setMessage("");
-      chunksRef.current = [];
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const text = event.results[i][0].transcript;
 
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setMessage("Audio recording is not supported on this browser.");
-        return;
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
-      let recorder: MediaRecorder;
-
-      if (MediaRecorder.isTypeSupported("audio/webm")) {
-        recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-        recorder = new MediaRecorder(stream, { mimeType: "audio/mp4" });
-      } else {
-        recorder = new MediaRecorder(stream);
-      }
-
-      recorderRef.current = recorder;
-
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          chunksRef.current.push(event.data);
+        if (event.results[i].isFinal) {
+          finalText += text + " ";
+        } else {
+          interimText += text;
         }
-      };
+      }
 
-      recorder.onstop = async () => {
-        await transcribeRecording();
-        stream.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      };
+      setTranscript((finalText + interimText).trim());
+    };
 
-      recorder.start(1000);
-      setIsRecording(true);
-      setMessage("Recording started.");
-    } catch {
-      setMessage("Microphone permission denied or not supported.");
-    }
+    recognition.onerror = () => {
+      setMessage(
+        "Microphone permission denied or unavailable. Please allow microphone access in browser settings."
+      );
+      setRecording(false);
+    };
+
+    recognition.onend = () => {
+      setRecording(false);
+    };
+
+    recognition.start();
+    recognitionRef.current = recognition;
+    setRecording(true);
   }
 
   function stopRecording() {
-    if (!recorderRef.current) {
-      setMessage("No active recording found.");
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+
+    setRecording(false);
+  }
+
+  function generateClinicalNote() {
+    if (!selectedPatient) {
+      setMessage("Please select a patient first.");
       return;
     }
 
-    recorderRef.current.stop();
-    setIsRecording(false);
-    setIsTranscribing(true);
-    setMessage("Recording stopped. Transcribing...");
-  }
-
-  async function transcribeRecording() {
-    try {
-      const mimeType =
-        chunksRef.current[0]?.type ||
-        (MediaRecorder.isTypeSupported("audio/webm")
-          ? "audio/webm"
-          : "audio/mp4");
-
-      const audioBlob = new Blob(chunksRef.current, { type: mimeType });
-
-      if (audioBlob.size === 0) {
-        setMessage("No audio captured. Please try again.");
-        setIsTranscribing(false);
-        return;
-      }
-
-      const extension = mimeType.includes("mp4") ? "mp4" : "webm";
-
-      const formData = new FormData();
-      formData.append("audio", audioBlob, `consultation.${extension}`);
-
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        setMessage(result.error || "Transcription failed.");
-        return;
-      }
-
-      setTranscript((prev) =>
-        prev ? `${prev}\n\n${result.text || ""}` : result.text || ""
-      );
-
-      setActiveTab("transcript");
-      setMessage("Transcription completed.");
-    } catch {
-      setMessage("Transcription failed.");
-    } finally {
-      setIsTranscribing(false);
-    }
-  }
-
-  async function generateSoap() {
     if (!transcript.trim()) {
-      setMessage("Please add transcript before generating SOAP.");
+      setMessage("Please record or type consultation notes first.");
       return;
     }
 
-    try {
-      setIsGenerating(true);
-      setMessage("Generating SOAP and ICD-10...");
+    const note = `
+PATIENT SUMMARY
+Name: ${selectedPatient.firstName} ${selectedPatient.surname}
+ID Number: ${selectedPatient.idNumber}
+Age: ${selectedPatient.age}
+DOB: ${selectedPatient.dob}
+Gender: ${selectedPatient.gender}
+Mobile: ${selectedPatient.mobile}
+Medical Aid: ${selectedPatient.medicalAid}
+Allergies: ${selectedPatient.allergies}
+Current Medicines: ${selectedPatient.currentMedicines}
 
-      const response = await fetch("/api/generate-clinical-note", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript, patientName }),
-      });
+CONSENT
+${consent ? "Patient consented to AI-assisted clinical documentation." : "Consent not confirmed."}
 
-      const result = await response.json();
+TRANSCRIPT
+${transcript}
 
-      if (!response.ok) {
-        setMessage(result.error || "Clinical note generation failed.");
-        return;
-      }
+SOAP NOTE
 
-      const note = result.clinicalNote || "";
-      const generatedSummary = `Patient: ${patientName}\nDate: ${new Date().toLocaleString()}\n\nClinical summary generated for doctor review.`;
+Subjective:
+- Patient reports: ${transcript}
 
-      setSoapNote(note);
-      setSummary(generatedSummary);
-      setActiveTab("soap");
-      setMessage("SOAP / ICD-10 generated.");
-    } catch {
-      setMessage("Clinical note generation failed.");
-    } finally {
-      setIsGenerating(false);
-    }
-  }
+Objective:
+- Examination findings to be completed by clinician.
+- Vitals to be added if available.
 
-  async function saveConsultation() {
+Assessment:
+- Clinical impression pending clinician confirmation.
+- Consider differential diagnosis based on symptoms.
+
+Plan:
+- Treatment plan to be confirmed by clinician.
+- Consider ICD-10 coding.
+- Consider prescription if clinically appropriate.
+- Provide patient education.
+- Arrange follow-up if required.
+
+ICD-10 SUGGESTIONS
+- To be confirmed by clinician.
+
+TASKS
+- Review diagnosis.
+- Confirm treatment.
+- Complete patient counselling.
+- Arrange follow-up.
+`;
+
+    setClinicalNote(note.trim());
+    setActiveTab("soap");
     setMessage("");
-
-    if (!patientId) {
-      setMessage("Please select a patient before saving.");
-      return;
-    }
-
-    if (!transcript.trim() && !soapNote.trim() && !summary.trim()) {
-      setMessage("Please capture consultation content before saving.");
-      return;
-    }
-
-    setIsSaving(true);
-
-    const payload = {
-      patient_id: patientId,
-      transcript: transcript.trim(),
-      soap_note: soapNote.trim(),
-      patient_summary: summary.trim(),
-      status: "completed",
-      created_at: new Date().toISOString(),
-    };
-
-    const { data, error } = consultationId
-      ? await supabase
-          .from("consultations")
-          .update(payload)
-          .eq("id", consultationId)
-          .select()
-          .single()
-      : await supabase
-          .from("consultations")
-          .insert(payload)
-          .select()
-          .single();
-
-    setIsSaving(false);
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    if (data) {
-      setConsultationId(data.id);
-      setSavedAt(data.created_at);
-      setMessage("Consultation saved with date stamp.");
-    }
   }
 
-  function printPdfSummary() {
-    const dateText = savedAt
-      ? new Date(savedAt).toLocaleString()
-      : new Date().toLocaleString();
-
-    const html = `
-      <html>
-        <head>
-          <title>CareScriber Consultation Summary</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 32px; color: #0f172a; }
-            h1 { font-size: 28px; }
-            h2 { margin-top: 28px; font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
-            pre { white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.5; }
-          </style>
-        </head>
-        <body>
-          <h1>CareScriber Consultation Summary</h1>
-          <p><strong>Patient:</strong> ${patientName}</p>
-          <p><strong>Date stamped:</strong> ${dateText}</p>
-
-          <h2>Patient Summary</h2>
-          <pre>${summary || "No summary captured."}</pre>
-
-          <h2>SOAP / ICD-10</h2>
-          <pre>${soapNote || "No SOAP note captured."}</pre>
-
-          <h2>Transcript</h2>
-          <pre>${transcript || "No transcript captured."}</pre>
-        </body>
-      </html>
-    `;
-
-    const win = window.open("", "_blank");
-    if (!win) {
-      setMessage("Popup blocked. Please allow popups to create PDF.");
-      return;
-    }
-
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
+  function copyNote() {
+    navigator.clipboard.writeText(clinicalNote);
+    setMessage("Clinical note copied.");
   }
 
   return (
-    <main style={styles.page}>
-      <div style={styles.card}>
-        <Link href="/dashboard" style={styles.link}>
-          ← Back to Dashboard
-        </Link>
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-6 flex items-center justify-between">
+          <Link href="/" className="text-sm font-semibold text-blue-700">
+            ← Back
+          </Link>
 
-        <h1 style={styles.title}>
-          {consultationId ? "Saved Consultation" : "New Consultation"}
-        </h1>
-
-        <p style={styles.subtitle}>Patient: {patientName}</p>
-
-        {savedAt && (
-          <p style={styles.dateStamp}>
-            Date stamped: {new Date(savedAt).toLocaleString()}
-          </p>
-        )}
-
-        <div style={styles.actions}>
-          <button onClick={startRecording} disabled={isRecording} style={styles.green}>
-            🎤 Start Recording
-          </button>
-
-          <button onClick={stopRecording} disabled={!isRecording} style={styles.red}>
-            ⏹ Stop Recording
-          </button>
-
-          <Link href="/patients" style={styles.outline}>
-            Select Patient
+          <Link
+            href="/patients"
+            className="rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm"
+          >
+            Register Patient
           </Link>
         </div>
 
-        {message && <div style={styles.message}>{message}</div>}
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
+            Videomed Clinical Assistant
+          </p>
 
-        <div style={styles.tabs}>
-          <button onClick={() => setActiveTab("transcript")} style={activeTab === "transcript" ? styles.activeTab : styles.tab}>
-            Transcript
-          </button>
-          <button onClick={() => setActiveTab("soap")} style={activeTab === "soap" ? styles.activeTab : styles.tab}>
-            SOAP / ICD-10
-          </button>
-          <button onClick={() => setActiveTab("summary")} style={activeTab === "summary" ? styles.activeTab : styles.tab}>
-            Summary
-          </button>
+          <h1 className="mt-2 text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
+            New Consultation
+          </h1>
+
+          <p className="mt-3 max-w-2xl text-lg text-slate-600">
+            Select a patient, confirm consent, record the consultation and
+            generate a clinical SOAP note.
+          </p>
+        </section>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
+          <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:col-span-1">
+            <h2 className="text-xl font-bold">Find Patient</h2>
+
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by surname or ID number"
+              className="mt-4 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-base outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            />
+
+            <div className="mt-4 space-y-3">
+              {filteredPatients.map((patient) => (
+                <button
+                  key={patient.idNumber}
+                  onClick={() => setSelectedPatient(patient)}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:border-blue-400 hover:bg-blue-50"
+                >
+                  <p className="font-bold">
+                    {patient.firstName} {patient.surname}
+                  </p>
+                  <p className="text-sm text-slate-600">
+                    ID: {patient.idNumber} | Age: {patient.age} |{" "}
+                    {patient.gender}
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            {selectedPatient && (
+              <div className="mt-5 rounded-2xl bg-blue-50 p-4 ring-1 ring-blue-100">
+                <p className="text-sm font-semibold text-blue-700">
+                  Selected Patient
+                </p>
+                <p className="mt-1 text-lg font-bold">
+                  {selectedPatient.firstName} {selectedPatient.surname}
+                </p>
+                <p className="text-sm text-slate-700">
+                  ID: {selectedPatient.idNumber}
+                </p>
+                <p className="text-sm text-slate-700">
+                  Age: {selectedPatient.age} | {selectedPatient.gender}
+                </p>
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:col-span-2">
+            <h2 className="text-xl font-bold">AI Consent</h2>
+
+            <label className="mt-4 flex gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={consent}
+                onChange={(e) => setConsent(e.target.checked)}
+                className="mt-1 h-5 w-5"
+              />
+              I have the patient’s consent to use CareScriber AI for clinical
+              documentation.
+            </label>
+
+            <div className="mt-6">
+              <h2 className="text-xl font-bold">Recording</h2>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  onClick={startRecording}
+                  disabled={recording}
+                  className="rounded-2xl bg-emerald-600 px-5 py-3 font-bold text-white shadow-sm disabled:opacity-50"
+                >
+                  🎙️ Start Recording
+                </button>
+
+                <button
+                  onClick={stopRecording}
+                  disabled={!recording}
+                  className="rounded-2xl bg-red-600 px-5 py-3 font-bold text-white shadow-sm disabled:opacity-50"
+                >
+                  ⏹ Stop Recording
+                </button>
+
+                <button
+                  onClick={generateClinicalNote}
+                  className="rounded-2xl bg-blue-700 px-5 py-3 font-bold text-white shadow-sm"
+                >
+                  Generate SOAP Note
+                </button>
+              </div>
+
+              {message && (
+                <div className="mt-4 rounded-2xl bg-blue-50 p-4 text-sm font-semibold text-blue-800">
+                  {message}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6">
+              <textarea
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+                placeholder="Transcript will appear here. You can also type or paste notes."
+                className="min-h-40 w-full rounded-2xl border border-slate-300 bg-white p-4 text-base outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              />
+            </div>
+          </section>
         </div>
 
-        {activeTab === "transcript" && (
-          <textarea style={styles.textarea} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="Transcript will appear here..." />
-        )}
+        <section className="mt-6 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setActiveTab("transcript")}
+              className={`rounded-2xl px-4 py-2 font-bold ${
+                activeTab === "transcript"
+                  ? "bg-blue-700 text-white"
+                  : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              Transcript
+            </button>
 
-        {activeTab === "soap" && (
-          <textarea style={styles.textarea} value={soapNote} onChange={(e) => setSoapNote(e.target.value)} placeholder="SOAP / ICD-10 will appear here..." />
-        )}
+            <button
+              onClick={() => setActiveTab("soap")}
+              className={`rounded-2xl px-4 py-2 font-bold ${
+                activeTab === "soap"
+                  ? "bg-blue-700 text-white"
+                  : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              SOAP / ICD-10
+            </button>
 
-        {activeTab === "summary" && (
-          <textarea style={styles.textarea} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="Summary will appear here..." />
-        )}
+            <button
+              onClick={() => setActiveTab("summary")}
+              className={`rounded-2xl px-4 py-2 font-bold ${
+                activeTab === "summary"
+                  ? "bg-blue-700 text-white"
+                  : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              Patient Summary
+            </button>
+          </div>
 
-        <div style={styles.actions}>
-          <button onClick={generateSoap} disabled={isGenerating} style={styles.blue}>
-            {isGenerating ? "Generating..." : "Generate SOAP / ICD-10"}
-          </button>
+          <div className="mt-5 rounded-2xl bg-slate-50 p-5">
+            {activeTab === "transcript" && (
+              <pre className="whitespace-pre-wrap text-sm text-slate-800">
+                {transcript || "No transcript captured yet."}
+              </pre>
+            )}
 
-          <button onClick={saveConsultation} disabled={isSaving} style={styles.dark}>
-            {isSaving ? "Saving..." : "Save Consultation"}
-          </button>
+            {activeTab === "soap" && (
+              <>
+                <div className="mb-4 flex justify-end">
+                  <button
+                    onClick={copyNote}
+                    disabled={!clinicalNote}
+                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                  >
+                    Copy Note
+                  </button>
+                </div>
 
-          <button onClick={printPdfSummary} style={styles.pdf}>
-            Download PDF Summary
-          </button>
-        </div>
+                <pre className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
+                  {clinicalNote || "Generate a SOAP note to view output."}
+                </pre>
+              </>
+            )}
+
+            {activeTab === "summary" && (
+              <div>
+                {selectedPatient ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Info label="Name" value={`${selectedPatient.firstName} ${selectedPatient.surname}`} />
+                    <Info label="ID Number" value={selectedPatient.idNumber} />
+                    <Info label="Age" value={selectedPatient.age} />
+                    <Info label="DOB" value={selectedPatient.dob} />
+                    <Info label="Gender" value={selectedPatient.gender} />
+                    <Info label="Mobile" value={selectedPatient.mobile} />
+                    <Info label="Medical Aid" value={selectedPatient.medicalAid} />
+                    <Info label="Allergies" value={selectedPatient.allergies} />
+                    <Info
+                      label="Current Medicines"
+                      value={selectedPatient.currentMedicines}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-slate-600">No patient selected.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </main>
   );
 }
 
-const styles: { [key: string]: React.CSSProperties } = {
-  page: {
-    minHeight: "100vh",
-    background: "#f1f5f9",
-    padding: 24,
-    fontFamily: "Arial, sans-serif",
-  },
-  card: {
-    maxWidth: 900,
-    margin: "0 auto",
-    background: "#ffffff",
-    padding: 32,
-    borderRadius: 28,
-    boxShadow: "0 20px 45px rgba(15, 23, 42, 0.14)",
-  },
-  link: {
-    color: "#2563eb",
-    fontWeight: 700,
-    textDecoration: "none",
-  },
-  title: {
-    fontSize: 46,
-    color: "#0f172a",
-    marginTop: 28,
-    marginBottom: 16,
-  },
-  subtitle: {
-    color: "#475569",
-    fontSize: 22,
-  },
-  dateStamp: {
-    background: "#ecfeff",
-    color: "#155e75",
-    padding: 12,
-    borderRadius: 12,
-    fontWeight: 700,
-  },
-  actions: {
-    display: "flex",
-    gap: 14,
-    flexWrap: "wrap",
-    marginTop: 24,
-  },
-  green: {
-    background: "#16a34a",
-    color: "#fff",
-    padding: "16px 24px",
-    borderRadius: 16,
-    border: 0,
-    fontWeight: 700,
-  },
-  red: {
-    background: "#dc2626",
-    color: "#fff",
-    padding: "16px 24px",
-    borderRadius: 16,
-    border: 0,
-    fontWeight: 700,
-  },
-  blue: {
-    background: "#2563eb",
-    color: "#fff",
-    padding: "16px 24px",
-    borderRadius: 16,
-    border: 0,
-    fontWeight: 700,
-  },
-  dark: {
-    background: "#0f172a",
-    color: "#fff",
-    padding: "16px 24px",
-    borderRadius: 16,
-    border: 0,
-    fontWeight: 700,
-  },
-  pdf: {
-    background: "#9333ea",
-    color: "#fff",
-    padding: "16px 24px",
-    borderRadius: 16,
-    border: 0,
-    fontWeight: 700,
-  },
-  outline: {
-    border: "2px solid #2563eb",
-    color: "#2563eb",
-    padding: "14px 22px",
-    borderRadius: 16,
-    textDecoration: "none",
-    fontWeight: 700,
-  },
-  message: {
-    background: "#dbeafe",
-    color: "#1e40af",
-    padding: 16,
-    borderRadius: 16,
-    marginTop: 20,
-    fontWeight: 600,
-  },
-  tabs: {
-    display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
-    gap: 12,
-    marginTop: 28,
-  },
-  tab: {
-    padding: 16,
-    borderRadius: 16,
-    border: "1px solid #cbd5e1",
-    background: "#f8fafc",
-    fontWeight: 700,
-  },
-  activeTab: {
-    padding: 16,
-    borderRadius: 16,
-    border: "2px solid #2563eb",
-    background: "#eff6ff",
-    color: "#2563eb",
-    fontWeight: 700,
-  },
-  textarea: {
-    width: "100%",
-    minHeight: 340,
-    marginTop: 24,
-    padding: 20,
-    borderRadius: 18,
-    border: "1px solid #cbd5e1",
-    fontSize: 17,
-    lineHeight: "26px",
-    boxSizing: "border-box",
-  },
-};
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 font-bold text-slate-900">{value}</p>
+    </div>
+  );
+}
