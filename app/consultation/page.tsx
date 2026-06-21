@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabaseClient";
 
 type Patient = {
   id: string;
