@@ -35,6 +35,7 @@ declare global {
 
 export default function ConsultationPage() {
   const recognitionRef = useRef<any>(null);
+  const shouldKeepRecordingRef = useRef(false);
   const finalTranscriptRef = useRef("");
 
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -127,54 +128,65 @@ export default function ConsultationPage() {
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setMessage("Microphone transcription is not supported on this browser.");
+      setMessage("Speech recording is not supported on this browser.");
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
+    shouldKeepRecordingRef.current = true;
+    finalTranscriptRef.current = transcript.trim();
 
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-ZA";
+    const startNewRecognition = () => {
+      if (!shouldKeepRecordingRef.current) return;
 
-    finalTranscriptRef.current = transcript;
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
 
-    recognition.onresult = (event: any) => {
-      let interimTranscript = "";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-ZA";
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript.trim();
+      recognition.onresult = (event: any) => {
+        let interimText = "";
 
-        if (event.results[i].isFinal) {
-          if (text && !finalTranscriptRef.current.includes(text)) {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const text = event.results[i][0].transcript.trim();
+
+          if (event.results[i].isFinal) {
             finalTranscriptRef.current =
               `${finalTranscriptRef.current} ${text}`.trim();
+          } else {
+            interimText = `${interimText} ${text}`.trim();
           }
-        } else {
-          interimTranscript = `${interimTranscript} ${text}`.trim();
         }
-      }
 
-      setTranscript(
-        `${finalTranscriptRef.current} ${interimTranscript}`.trim()
-      );
+        setTranscript(`${finalTranscriptRef.current} ${interimText}`.trim());
+      };
+
+      recognition.onerror = (event: any) => {
+        if (event.error === "not-allowed") {
+          setMessage("Microphone permission denied.");
+          shouldKeepRecordingRef.current = false;
+          setRecording(false);
+        }
+      };
+
+      recognition.onend = () => {
+        if (shouldKeepRecordingRef.current) {
+          setTimeout(startNewRecognition, 500);
+        } else {
+          setRecording(false);
+        }
+      };
+
+      recognition.start();
+      setRecording(true);
     };
 
-    recognition.onerror = () => {
-      setMessage("Microphone permission denied or not supported.");
-      setRecording(false);
-    };
-
-    recognition.onend = () => {
-      setRecording(false);
-    };
-
-    recognition.start();
-    setRecording(true);
+    startNewRecognition();
   }
 
   function stopRecording() {
+    shouldKeepRecordingRef.current = false;
     recognitionRef.current?.stop();
     setRecording(false);
   }
@@ -260,19 +272,9 @@ ICD-10 SUGGESTIONS
         <head>
           <title>CareScriber Clinical Note</title>
           <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 32px;
-              color: #0f172a;
-              line-height: 1.6;
-            }
-            h1 {
-              color: #1d4ed8;
-            }
-            pre {
-              white-space: pre-wrap;
-              font-size: 14px;
-            }
+            body { font-family: Arial, sans-serif; padding: 32px; color: #0f172a; line-height: 1.6; }
+            h1 { color: #1d4ed8; }
+            pre { white-space: pre-wrap; font-size: 14px; }
           </style>
         </head>
         <body>
