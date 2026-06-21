@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../lib/supabase";
+import { supabase } from "../../lib/supabaseClient";
 
 type Patient = {
   id: string;
@@ -18,6 +18,14 @@ type Patient = {
   current_medicines?: string;
 };
 
+type Consultation = {
+  id: string;
+  created_at?: string;
+  patient_summary?: string;
+  transcript?: string;
+  soap_note?: string;
+};
+
 declare global {
   interface Window {
     webkitSpeechRecognition?: any;
@@ -25,12 +33,15 @@ declare global {
   }
 }
 
-export default function NewConsultationPage() {
+export default function ConsultationPage() {
   const recognitionRef = useRef<any>(null);
+  const finalTranscriptRef = useRef("");
 
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [recentConsultations, setRecentConsultations] = useState<Consultation[]>([]);
   const [search, setSearch] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+
   const [consent, setConsent] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -39,6 +50,7 @@ export default function NewConsultationPage() {
 
   useEffect(() => {
     loadPatients();
+    loadRecentConsultations();
   }, []);
 
   async function loadPatients() {
@@ -52,21 +64,31 @@ export default function NewConsultationPage() {
       return;
     }
 
-    const cleanPatients = (data || []).map((p: any) => ({
-      id: p.id,
-      first_name: p.first_name || p.name || "",
-      surname: p.surname || p.last_name || "",
-      id_number: p.id_number || p.patient_id || "",
-      age: p.age || null,
-      date_of_birth: p.date_of_birth || p.dob || null,
-      gender: p.gender || "",
-      mobile: p.mobile || p.mobile_number || "",
-      medical_aid: p.medical_aid || "",
-      allergies: p.allergies || "No known allergies",
-      current_medicines: p.current_medicines || "",
-    }));
+    setPatients(
+      (data || []).map((p: any) => ({
+        id: p.id,
+        first_name: p.first_name || p.name || "",
+        surname: p.surname || p.last_name || "",
+        id_number: p.id_number || p.patient_id || "",
+        age: p.age || null,
+        date_of_birth: p.date_of_birth || p.dob || null,
+        gender: p.gender || "",
+        mobile: p.mobile || p.mobile_number || "",
+        medical_aid: p.medical_aid || "",
+        allergies: p.allergies || "No known allergies",
+        current_medicines: p.current_medicines || "",
+      }))
+    );
+  }
 
-    setPatients(cleanPatients);
+  async function loadRecentConsultations() {
+    const { data } = await supabase
+      .from("consultations")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    setRecentConsultations(data || []);
   }
 
   const filteredPatients = useMemo(() => {
@@ -74,14 +96,15 @@ export default function NewConsultationPage() {
     if (!q || selectedPatient) return [];
 
     return patients.filter((p) => {
-      const searchable = `
-        ${p.first_name || ""}
-        ${p.surname || ""}
-        ${p.id_number || ""}
-        ${p.mobile || ""}
+      const fullText = `
+        ${p.first_name}
+        ${p.surname}
+        ${p.first_name} ${p.surname}
+        ${p.id_number}
+        ${p.mobile}
       `.toLowerCase();
 
-      return searchable.includes(q);
+      return fullText.includes(q);
     });
   }, [patients, search, selectedPatient]);
 
@@ -115,24 +138,27 @@ export default function NewConsultationPage() {
     recognition.interimResults = true;
     recognition.lang = "en-ZA";
 
-    let finalTranscript = transcript;
+    finalTranscriptRef.current = transcript;
 
     recognition.onresult = (event: any) => {
-      let interim = "";
+      let interimTranscript = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const text = event.results[i][0].transcript.trim();
 
         if (event.results[i].isFinal) {
-          if (text && !finalTranscript.includes(text)) {
-            finalTranscript = `${finalTranscript} ${text}`.trim();
+          if (text && !finalTranscriptRef.current.includes(text)) {
+            finalTranscriptRef.current =
+              `${finalTranscriptRef.current} ${text}`.trim();
           }
         } else {
-          interim = `${interim} ${text}`.trim();
+          interimTranscript = `${interimTranscript} ${text}`.trim();
         }
       }
 
-      setTranscript(`${finalTranscript} ${interim}`.trim());
+      setTranscript(
+        `${finalTranscriptRef.current} ${interimTranscript}`.trim()
+      );
     };
 
     recognition.onerror = () => {
@@ -215,6 +241,49 @@ ICD-10 SUGGESTIONS
       soap_note: generated,
       consent_confirmed: consent,
     });
+
+    loadRecentConsultations();
+  }
+
+  function downloadPdf() {
+    if (!note) return;
+
+    const printWindow = window.open("", "_blank");
+
+    if (!printWindow) {
+      setMessage("Popup blocked. Please allow popups to export PDF.");
+      return;
+    }
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>CareScriber Clinical Note</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              padding: 32px;
+              color: #0f172a;
+              line-height: 1.6;
+            }
+            h1 {
+              color: #1d4ed8;
+            }
+            pre {
+              white-space: pre-wrap;
+              font-size: 14px;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>CareScriber Clinical Note</h1>
+          <pre>${note.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+        </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+    printWindow.print();
   }
 
   return (
@@ -240,7 +309,7 @@ ICD-10 SUGGESTIONS
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
-            if (selectedPatient) setSelectedPatient(null);
+            setSelectedPatient(null);
           }}
           placeholder="Search by surname, first name, ID number or mobile"
           style={styles.input}
@@ -336,7 +405,7 @@ ICD-10 SUGGESTIONS
         <textarea
           value={transcript}
           onChange={(e) => setTranscript(e.target.value)}
-          placeholder="Transcript will appear here. You can also type notes manually."
+          placeholder="Transcript will appear here. You can edit it before generating SOAP."
           style={styles.textarea}
         />
 
@@ -347,8 +416,32 @@ ICD-10 SUGGESTIONS
         {note && (
           <>
             <h2 style={styles.sectionTitle}>Generated Clinical Note</h2>
+
+            <button type="button" onClick={downloadPdf} style={styles.pdfButton}>
+              Download / Print PDF
+            </button>
+
             <pre style={styles.noteBox}>{note}</pre>
           </>
+        )}
+
+        <hr style={styles.divider} />
+
+        <h2 style={styles.smallTitle}>Recent Consultations</h2>
+
+        <Link href="/consultation" style={styles.secondaryButton}>
+          Start New Consultation
+        </Link>
+
+        {recentConsultations.length === 0 ? (
+          <p style={styles.muted}>No recent consultations yet.</p>
+        ) : (
+          recentConsultations.map((c) => (
+            <div key={c.id} style={styles.recentCard}>
+              <strong>{c.patient_summary || "Clinical consultation"}</strong>
+              <span>{c.created_at || ""}</span>
+            </div>
+          ))
         )}
       </section>
     </main>
@@ -382,14 +475,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#2563eb",
     fontWeight: 800,
     marginTop: "32px",
-    marginBottom: "8px",
   },
   title: {
     fontSize: "clamp(42px, 10vw, 72px)",
     lineHeight: 1,
     margin: 0,
     fontWeight: 900,
-    letterSpacing: "-0.05em",
   },
   subtitle: {
     fontSize: "clamp(22px, 5vw, 34px)",
@@ -404,24 +495,25 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sectionTitle: {
     fontSize: "clamp(34px, 7vw, 52px)",
-    lineHeight: 1.05,
     marginBottom: "24px",
     fontWeight: 900,
-    letterSpacing: "-0.04em",
+  },
+  smallTitle: {
+    fontSize: "32px",
+    fontWeight: 900,
   },
   input: {
     width: "100%",
     boxSizing: "border-box",
     border: "2px solid #cbd5e1",
     borderRadius: "20px",
-    padding: "22px 24px",
+    padding: "22px",
     fontSize: "22px",
-    outline: "none",
   },
   muted: {
     color: "#64748b",
-    fontSize: "22px",
-    marginTop: "24px",
+    fontSize: "20px",
+    marginTop: "20px",
   },
   patientCard: {
     width: "100%",
@@ -444,7 +536,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#166534",
     fontWeight: 800,
     fontSize: "18px",
-    lineHeight: 1.5,
   },
   changeButton: {
     marginTop: "12px",
@@ -454,12 +545,10 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 14px",
     color: "#166534",
     fontWeight: 800,
-    cursor: "pointer",
   },
   checkboxRow: {
     display: "flex",
     gap: "18px",
-    alignItems: "flex-start",
     fontSize: "24px",
     lineHeight: 1.4,
   },
@@ -480,7 +569,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#ffffff",
     fontSize: "22px",
     fontWeight: 900,
-    cursor: "pointer",
   },
   dangerButton: {
     border: 0,
@@ -490,7 +578,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#ffffff",
     fontSize: "22px",
     fontWeight: 900,
-    cursor: "pointer",
   },
   blueButton: {
     width: "100%",
@@ -501,8 +588,30 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#ffffff",
     fontSize: "22px",
     fontWeight: 900,
-    cursor: "pointer",
     marginTop: "18px",
+  },
+  pdfButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: "18px",
+    padding: "18px",
+    background: "#0f172a",
+    color: "#ffffff",
+    fontSize: "20px",
+    fontWeight: 900,
+    marginBottom: "18px",
+  },
+  secondaryButton: {
+    display: "block",
+    textAlign: "center",
+    textDecoration: "none",
+    borderRadius: "18px",
+    padding: "18px",
+    background: "#dbeafe",
+    color: "#1d4ed8",
+    fontSize: "20px",
+    fontWeight: 900,
+    marginBottom: "18px",
   },
   textarea: {
     width: "100%",
@@ -530,5 +639,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "16px",
     lineHeight: 1.6,
     overflowX: "auto",
+  },
+  recentCard: {
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: "16px",
+    padding: "16px",
+    marginTop: "12px",
+    display: "grid",
+    gap: "6px",
   },
 };
