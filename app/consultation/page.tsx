@@ -1,7 +1,7 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
 
 type Patient = {
   firstName: string;
@@ -11,51 +11,37 @@ type Patient = {
   dob: string;
   gender: string;
   mobile: string;
+  email: string;
   medicalAid: string;
   allergies: string;
   currentMedicines: string;
 };
 
-const demoPatients: Patient[] = [
-  {
-    firstName: "Siraaj",
-    surname: "Adams",
-    idNumber: "8990",
-    age: "49",
-    dob: "1974-06-16",
-    gender: "Female",
-    mobile: "0827427073",
-    medicalAid: "Not captured",
-    allergies: "No known allergies",
-    currentMedicines: "Not captured",
-  },
-];
-
-export default function ConsultationPage() {
-  const recognitionRef = useRef<any>(null);
-
+export default function NewConsultationPage() {
+  const [patients, setPatients] = useState<Patient[]>([]);
   const [search, setSearch] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [consent, setConsent] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const [clinicalNote, setClinicalNote] = useState("");
-  const [activeTab, setActiveTab] = useState<"transcript" | "soap" | "summary">(
-    "transcript"
-  );
+  const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
 
-  const filteredPatients = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    if (!q) return [];
+  const recognitionRef = useRef<any>(null);
 
-    return demoPatients.filter(
-      (p) =>
-        p.firstName.toLowerCase().includes(q) ||
-        p.surname.toLowerCase().includes(q) ||
-        p.idNumber.toLowerCase().includes(q)
+  useEffect(() => {
+    const saved = localStorage.getItem("carescriber_patients");
+    if (saved) setPatients(JSON.parse(saved));
+  }, []);
+
+  const filteredPatients = patients.filter((p) => {
+    const q = search.toLowerCase();
+    return (
+      p.surname.toLowerCase().includes(q) ||
+      p.idNumber.toLowerCase().includes(q) ||
+      p.firstName.toLowerCase().includes(q)
     );
-  }, [search]);
+  });
 
   function startRecording() {
     setMessage("");
@@ -66,42 +52,35 @@ export default function ConsultationPage() {
 
     if (!SpeechRecognition) {
       setMessage(
-        "Microphone transcription is not supported on this browser. Please use Chrome, Edge, or Safari with microphone permission enabled."
+        "Microphone transcription is not supported on this browser. Please use Chrome or Safari with microphone permission enabled."
       );
-      return;
-    }
-
-    if (!consent) {
-      setMessage("Please confirm AI consent before recording.");
       return;
     }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.interimResults = false;
     recognition.lang = "en-ZA";
 
-    let finalText = "";
-
     recognition.onresult = (event: any) => {
-      let interimText = "";
+      let finalText = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript;
-
         if (event.results[i].isFinal) {
-          finalText += text + " ";
-        } else {
-          interimText += text;
+          finalText += event.results[i][0].transcript + " ";
         }
       }
 
-      setTranscript((finalText + interimText).trim());
+      if (finalText.trim()) {
+        setTranscript((prev) =>
+          `${prev} ${finalText}`.replace(/\s+/g, " ").trim()
+        );
+      }
     };
 
     recognition.onerror = () => {
       setMessage(
-        "Microphone permission denied or unavailable. Please allow microphone access in browser settings."
+        "Microphone permission denied or recording stopped by the browser."
       );
       setRecording(false);
     };
@@ -110,32 +89,23 @@ export default function ConsultationPage() {
       setRecording(false);
     };
 
-    recognition.start();
     recognitionRef.current = recognition;
+    recognition.start();
     setRecording(true);
   }
 
   function stopRecording() {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
-
+    recognitionRef.current?.stop();
     setRecording(false);
   }
 
-  function generateClinicalNote() {
+  function generateNote() {
     if (!selectedPatient) {
       setMessage("Please select a patient first.");
       return;
     }
 
-    if (!transcript.trim()) {
-      setMessage("Please record or type consultation notes first.");
-      return;
-    }
-
-    const note = `
+    const generated = `
 PATIENT SUMMARY
 Name: ${selectedPatient.firstName} ${selectedPatient.surname}
 ID Number: ${selectedPatient.idNumber}
@@ -143,20 +113,20 @@ Age: ${selectedPatient.age}
 DOB: ${selectedPatient.dob}
 Gender: ${selectedPatient.gender}
 Mobile: ${selectedPatient.mobile}
-Medical Aid: ${selectedPatient.medicalAid}
-Allergies: ${selectedPatient.allergies}
-Current Medicines: ${selectedPatient.currentMedicines}
+Medical Aid: ${selectedPatient.medicalAid || "Not captured"}
+Allergies: ${selectedPatient.allergies || "No known allergies"}
+Current Medicines: ${selectedPatient.currentMedicines || "Not captured"}
 
 CONSENT
 ${consent ? "Patient consented to AI-assisted clinical documentation." : "Consent not confirmed."}
 
 TRANSCRIPT
-${transcript}
+${transcript || "No transcript captured."}
 
 SOAP NOTE
 
 Subjective:
-- Patient reports: ${transcript}
+- Patient reports: ${transcript || "History to be completed."}
 
 Objective:
 - Examination findings to be completed by clinician.
@@ -164,11 +134,10 @@ Objective:
 
 Assessment:
 - Clinical impression pending clinician confirmation.
-- Consider differential diagnosis based on symptoms.
+- Consider ICD-10 coding.
 
 Plan:
 - Treatment plan to be confirmed by clinician.
-- Consider ICD-10 coding.
 - Consider prescription if clinically appropriate.
 - Provide patient education.
 - Arrange follow-up if required.
@@ -177,257 +146,304 @@ ICD-10 SUGGESTIONS
 - To be confirmed by clinician.
 
 TASKS
-- Review diagnosis.
-- Confirm treatment.
-- Complete patient counselling.
-- Arrange follow-up.
+- Review note.
+- Confirm diagnosis.
+- Confirm treatment plan.
+- Save consultation.
 `;
 
-    setClinicalNote(note.trim());
-    setActiveTab("soap");
-    setMessage("");
-  }
-
-  function copyNote() {
-    navigator.clipboard.writeText(clinicalNote);
-    setMessage("Clinical note copied.");
+    setNote(generated.trim());
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mb-6 flex items-center justify-between">
-          <Link href="/" className="text-sm font-semibold text-blue-700">
-            ← Back
-          </Link>
+    <main style={styles.page}>
+      <div style={styles.card}>
+        <Link href="/" style={styles.back}>
+          ← Back
+        </Link>
 
-          <Link
-            href="/patients"
-            className="rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm"
-          >
-            Register Patient
-          </Link>
-        </div>
+        <p style={styles.kicker}>Videomed Clinical Assistant</p>
+        <h1 style={styles.title}>New Consultation</h1>
+        <p style={styles.subtitle}>
+          Select a patient, confirm consent, record the consultation and generate
+          a clinical SOAP note.
+        </p>
 
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
-            Videomed Clinical Assistant
-          </p>
+        <section style={styles.section}>
+          <h2 style={styles.heading}>Find Patient</h2>
 
-          <h1 className="mt-2 text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
-            New Consultation
-          </h1>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by surname, first name or ID number"
+            style={styles.input}
+          />
 
-          <p className="mt-3 max-w-2xl text-lg text-slate-600">
-            Select a patient, confirm consent, record the consultation and
-            generate a clinical SOAP note.
-          </p>
-        </section>
+          {search && (
+            <div style={styles.results}>
+              {filteredPatients.length === 0 && (
+                <p style={styles.muted}>No matching patient found.</p>
+              )}
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-3">
-          <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:col-span-1">
-            <h2 className="text-xl font-bold">Find Patient</h2>
-
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by surname or ID number"
-              className="mt-4 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-base outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-            />
-
-            <div className="mt-4 space-y-3">
-              {filteredPatients.map((patient) => (
+              {filteredPatients.map((p, index) => (
                 <button
-                  key={patient.idNumber}
-                  onClick={() => setSelectedPatient(patient)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:border-blue-400 hover:bg-blue-50"
+                  key={index}
+                  onClick={() => setSelectedPatient(p)}
+                  style={styles.patientButton}
                 >
-                  <p className="font-bold">
-                    {patient.firstName} {patient.surname}
-                  </p>
-                  <p className="text-sm text-slate-600">
-                    ID: {patient.idNumber} | Age: {patient.age} |{" "}
-                    {patient.gender}
-                  </p>
+                  <strong>
+                    {p.firstName} {p.surname}
+                  </strong>
+                  <br />
+                  ID: {p.idNumber} | Age: {p.age} | {p.gender}
                 </button>
               ))}
             </div>
+          )}
 
-            {selectedPatient && (
-              <div className="mt-5 rounded-2xl bg-blue-50 p-4 ring-1 ring-blue-100">
-                <p className="text-sm font-semibold text-blue-700">
-                  Selected Patient
-                </p>
-                <p className="mt-1 text-lg font-bold">
-                  {selectedPatient.firstName} {selectedPatient.surname}
-                </p>
-                <p className="text-sm text-slate-700">
-                  ID: {selectedPatient.idNumber}
-                </p>
-                <p className="text-sm text-slate-700">
-                  Age: {selectedPatient.age} | {selectedPatient.gender}
-                </p>
-              </div>
-            )}
-          </section>
+          {selectedPatient && (
+            <div style={styles.selected}>
+              Selected:{" "}
+              <strong>
+                {selectedPatient.firstName} {selectedPatient.surname}
+              </strong>{" "}
+              | ID: {selectedPatient.idNumber}
+            </div>
+          )}
+        </section>
 
-          <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:col-span-2">
-            <h2 className="text-xl font-bold">AI Consent</h2>
+        <section style={styles.section}>
+          <h2 style={styles.heading}>AI Consent</h2>
 
-            <label className="mt-4 flex gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-700">
-              <input
-                type="checkbox"
-                checked={consent}
-                onChange={(e) => setConsent(e.target.checked)}
-                className="mt-1 h-5 w-5"
-              />
+          <label style={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+            />
+            <span>
               I have the patient’s consent to use CareScriber AI for clinical
               documentation.
-            </label>
-
-            <div className="mt-6">
-              <h2 className="text-xl font-bold">Recording</h2>
-
-              <div className="mt-4 flex flex-wrap gap-3">
-                <button
-                  onClick={startRecording}
-                  disabled={recording}
-                  className="rounded-2xl bg-emerald-600 px-5 py-3 font-bold text-white shadow-sm disabled:opacity-50"
-                >
-                  🎙️ Start Recording
-                </button>
-
-                <button
-                  onClick={stopRecording}
-                  disabled={!recording}
-                  className="rounded-2xl bg-red-600 px-5 py-3 font-bold text-white shadow-sm disabled:opacity-50"
-                >
-                  ⏹ Stop Recording
-                </button>
-
-                <button
-                  onClick={generateClinicalNote}
-                  className="rounded-2xl bg-blue-700 px-5 py-3 font-bold text-white shadow-sm"
-                >
-                  Generate SOAP Note
-                </button>
-              </div>
-
-              {message && (
-                <div className="mt-4 rounded-2xl bg-blue-50 p-4 text-sm font-semibold text-blue-800">
-                  {message}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6">
-              <textarea
-                value={transcript}
-                onChange={(e) => setTranscript(e.target.value)}
-                placeholder="Transcript will appear here. You can also type or paste notes."
-                className="min-h-40 w-full rounded-2xl border border-slate-300 bg-white p-4 text-base outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              />
-            </div>
-          </section>
-        </div>
-
-        <section className="mt-6 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setActiveTab("transcript")}
-              className={`rounded-2xl px-4 py-2 font-bold ${
-                activeTab === "transcript"
-                  ? "bg-blue-700 text-white"
-                  : "bg-slate-100 text-slate-700"
-              }`}
-            >
-              Transcript
-            </button>
-
-            <button
-              onClick={() => setActiveTab("soap")}
-              className={`rounded-2xl px-4 py-2 font-bold ${
-                activeTab === "soap"
-                  ? "bg-blue-700 text-white"
-                  : "bg-slate-100 text-slate-700"
-              }`}
-            >
-              SOAP / ICD-10
-            </button>
-
-            <button
-              onClick={() => setActiveTab("summary")}
-              className={`rounded-2xl px-4 py-2 font-bold ${
-                activeTab === "summary"
-                  ? "bg-blue-700 text-white"
-                  : "bg-slate-100 text-slate-700"
-              }`}
-            >
-              Patient Summary
-            </button>
-          </div>
-
-          <div className="mt-5 rounded-2xl bg-slate-50 p-5">
-            {activeTab === "transcript" && (
-              <pre className="whitespace-pre-wrap text-sm text-slate-800">
-                {transcript || "No transcript captured yet."}
-              </pre>
-            )}
-
-            {activeTab === "soap" && (
-              <>
-                <div className="mb-4 flex justify-end">
-                  <button
-                    onClick={copyNote}
-                    disabled={!clinicalNote}
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-                  >
-                    Copy Note
-                  </button>
-                </div>
-
-                <pre className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
-                  {clinicalNote || "Generate a SOAP note to view output."}
-                </pre>
-              </>
-            )}
-
-            {activeTab === "summary" && (
-              <div>
-                {selectedPatient ? (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Info label="Name" value={`${selectedPatient.firstName} ${selectedPatient.surname}`} />
-                    <Info label="ID Number" value={selectedPatient.idNumber} />
-                    <Info label="Age" value={selectedPatient.age} />
-                    <Info label="DOB" value={selectedPatient.dob} />
-                    <Info label="Gender" value={selectedPatient.gender} />
-                    <Info label="Mobile" value={selectedPatient.mobile} />
-                    <Info label="Medical Aid" value={selectedPatient.medicalAid} />
-                    <Info label="Allergies" value={selectedPatient.allergies} />
-                    <Info
-                      label="Current Medicines"
-                      value={selectedPatient.currentMedicines}
-                    />
-                  </div>
-                ) : (
-                  <p className="text-slate-600">No patient selected.</p>
-                )}
-              </div>
-            )}
-          </div>
+            </span>
+          </label>
         </section>
+
+        <section style={styles.section}>
+          <h2 style={styles.heading}>Recording</h2>
+
+          <div style={styles.buttonRow}>
+            <button
+              onClick={startRecording}
+              disabled={recording}
+              style={{
+                ...styles.primaryButton,
+                opacity: recording ? 0.6 : 1,
+              }}
+            >
+              🎙 Start Recording
+            </button>
+
+            <button
+              onClick={stopRecording}
+              disabled={!recording}
+              style={{
+                ...styles.dangerButton,
+                opacity: !recording ? 0.5 : 1,
+              }}
+            >
+              ⏹ Stop Recording
+            </button>
+          </div>
+
+          {recording && <p style={styles.recording}>Recording in progress...</p>}
+          {message && <p style={styles.message}>{message}</p>}
+        </section>
+
+        <section style={styles.section}>
+          <h2 style={styles.heading}>Transcript / Clinical Notes</h2>
+
+          <textarea
+            value={transcript}
+            onChange={(e) => setTranscript(e.target.value)}
+            placeholder="Transcript will appear here. You can also type or edit notes manually."
+            style={styles.textarea}
+          />
+
+          <button onClick={generateNote} style={styles.secondaryButton}>
+            Generate SOAP Note
+          </button>
+        </section>
+
+        {note && (
+          <section style={styles.noteBox}>
+            <h2 style={styles.heading}>Generated Clinical Note</h2>
+            <pre style={styles.pre}>{note}</pre>
+          </section>
+        )}
       </div>
     </main>
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-        {label}
-      </p>
-      <p className="mt-1 font-bold text-slate-900">{value}</p>
-    </div>
-  );
-}
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: "100vh",
+    background: "#f4f7fb",
+    padding: "20px",
+    fontFamily:
+      "Arial, Helvetica, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    color: "#0f172a",
+  },
+  card: {
+    maxWidth: "900px",
+    margin: "0 auto",
+    background: "#ffffff",
+    borderRadius: "24px",
+    padding: "24px",
+    boxShadow: "0 12px 40px rgba(15, 23, 42, 0.12)",
+  },
+  back: {
+    display: "inline-block",
+    marginBottom: "20px",
+    color: "#2563eb",
+    textDecoration: "none",
+    fontWeight: 700,
+  },
+  kicker: {
+    color: "#2563eb",
+    fontWeight: 700,
+    marginBottom: "8px",
+  },
+  title: {
+    fontSize: "clamp(36px, 8vw, 64px)",
+    lineHeight: 1,
+    margin: "0 0 16px",
+    fontWeight: 800,
+  },
+  subtitle: {
+    fontSize: "20px",
+    color: "#475569",
+    marginBottom: "28px",
+    lineHeight: 1.5,
+  },
+  section: {
+    marginTop: "28px",
+    paddingTop: "24px",
+    borderTop: "1px solid #e2e8f0",
+  },
+  heading: {
+    fontSize: "28px",
+    marginBottom: "16px",
+    fontWeight: 800,
+  },
+  input: {
+    width: "100%",
+    padding: "16px",
+    borderRadius: "14px",
+    border: "1px solid #cbd5e1",
+    fontSize: "18px",
+    boxSizing: "border-box",
+  },
+  textarea: {
+    width: "100%",
+    minHeight: "160px",
+    padding: "16px",
+    borderRadius: "14px",
+    border: "1px solid #cbd5e1",
+    fontSize: "18px",
+    boxSizing: "border-box",
+    resize: "vertical",
+  },
+  results: {
+    marginTop: "12px",
+    display: "grid",
+    gap: "10px",
+  },
+  patientButton: {
+    textAlign: "left",
+    padding: "16px",
+    borderRadius: "14px",
+    border: "1px solid #bfdbfe",
+    background: "#eff6ff",
+    fontSize: "16px",
+    cursor: "pointer",
+  },
+  selected: {
+    marginTop: "14px",
+    padding: "14px",
+    borderRadius: "14px",
+    background: "#dcfce7",
+    color: "#166534",
+    fontSize: "16px",
+  },
+  checkboxRow: {
+    display: "flex",
+    gap: "12px",
+    alignItems: "flex-start",
+    fontSize: "18px",
+    lineHeight: 1.4,
+  },
+  buttonRow: {
+    display: "flex",
+    gap: "12px",
+    flexWrap: "wrap",
+  },
+  primaryButton: {
+    padding: "16px 22px",
+    borderRadius: "16px",
+    border: "none",
+    background: "#16a34a",
+    color: "#ffffff",
+    fontWeight: 800,
+    fontSize: "17px",
+  },
+  dangerButton: {
+    padding: "16px 22px",
+    borderRadius: "16px",
+    border: "none",
+    background: "#dc2626",
+    color: "#ffffff",
+    fontWeight: 800,
+    fontSize: "17px",
+  },
+  secondaryButton: {
+    marginTop: "14px",
+    padding: "16px 22px",
+    borderRadius: "16px",
+    border: "none",
+    background: "#2563eb",
+    color: "#ffffff",
+    fontWeight: 800,
+    fontSize: "17px",
+  },
+  recording: {
+    marginTop: "12px",
+    color: "#dc2626",
+    fontWeight: 700,
+  },
+  message: {
+    marginTop: "12px",
+    padding: "14px",
+    borderRadius: "14px",
+    background: "#dbeafe",
+    color: "#1e40af",
+    fontWeight: 700,
+  },
+  muted: {
+    color: "#64748b",
+  },
+  noteBox: {
+    marginTop: "28px",
+    padding: "20px",
+    borderRadius: "20px",
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+  },
+  pre: {
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    fontSize: "15px",
+    lineHeight: 1.6,
+    fontFamily: "Arial, Helvetica, sans-serif",
+  },
+};
