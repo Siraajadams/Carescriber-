@@ -28,18 +28,28 @@ export default function NewConsultationPage() {
   const [message, setMessage] = useState("");
 
   const recognitionRef = useRef<any>(null);
+  const finalTranscriptRef = useRef("");
 
   useEffect(() => {
     const saved = localStorage.getItem("carescriber_patients");
-    if (saved) setPatients(JSON.parse(saved));
+    if (saved) {
+      try {
+        setPatients(JSON.parse(saved));
+      } catch {
+        setPatients([]);
+      }
+    }
   }, []);
 
   const filteredPatients = patients.filter((p) => {
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
+    if (!q) return false;
+
     return (
-      p.surname.toLowerCase().includes(q) ||
-      p.idNumber.toLowerCase().includes(q) ||
-      p.firstName.toLowerCase().includes(q)
+      p.firstName?.toLowerCase().includes(q) ||
+      p.surname?.toLowerCase().includes(q) ||
+      p.idNumber?.toLowerCase().includes(q) ||
+      `${p.firstName} ${p.surname}`.toLowerCase().includes(q)
     );
   });
 
@@ -52,46 +62,64 @@ export default function NewConsultationPage() {
 
     if (!SpeechRecognition) {
       setMessage(
-        "Microphone transcription is not supported on this browser. Please use Chrome or Safari with microphone permission enabled."
+        "Microphone transcription is not supported on this browser. On iPhone, use Safari or Chrome, allow microphone access, and keep the browser tab open."
       );
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = "en-ZA";
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-ZA";
 
-    recognition.onresult = (event: any) => {
-      let finalText = "";
+      recognition.onresult = (event: any) => {
+        let interimText = "";
+        let newFinalText = "";
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalText += event.results[i][0].transcript + " ";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const text = event.results[i][0].transcript;
+
+          if (event.results[i].isFinal) {
+            newFinalText += text + " ";
+          } else {
+            interimText += text + " ";
+          }
         }
-      }
 
-      if (finalText.trim()) {
-        setTranscript((prev) =>
-          `${prev} ${finalText}`.replace(/\s+/g, " ").trim()
+        if (newFinalText.trim()) {
+          finalTranscriptRef.current = `${finalTranscriptRef.current} ${newFinalText}`
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        setTranscript(
+          `${finalTranscriptRef.current} ${interimText}`
+            .replace(/\s+/g, " ")
+            .trim()
         );
-      }
-    };
+      };
 
-    recognition.onerror = () => {
-      setMessage(
-        "Microphone permission denied or recording stopped by the browser."
-      );
+      recognition.onerror = (event: any) => {
+        setMessage(
+          event?.error === "not-allowed"
+            ? "Microphone permission denied. Please allow microphone access in the browser settings."
+            : "Recording stopped or microphone error occurred. You can continue typing notes manually."
+        );
+        setRecording(false);
+      };
+
+      recognition.onend = () => {
+        setRecording(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+      setRecording(true);
+    } catch {
+      setMessage("Unable to start recording. Please try again or type notes manually.");
       setRecording(false);
-    };
-
-    recognition.onend = () => {
-      setRecording(false);
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setRecording(true);
+    }
   }
 
   function stopRecording() {
@@ -113,6 +141,7 @@ Age: ${selectedPatient.age}
 DOB: ${selectedPatient.dob}
 Gender: ${selectedPatient.gender}
 Mobile: ${selectedPatient.mobile}
+Email: ${selectedPatient.email || "Not captured"}
 Medical Aid: ${selectedPatient.medicalAid || "Not captured"}
 Allergies: ${selectedPatient.allergies || "No known allergies"}
 Current Medicines: ${selectedPatient.currentMedicines || "Not captured"}
@@ -134,10 +163,11 @@ Objective:
 
 Assessment:
 - Clinical impression pending clinician confirmation.
-- Consider ICD-10 coding.
+- Consider differential diagnosis based on symptoms.
 
 Plan:
 - Treatment plan to be confirmed by clinician.
+- Consider ICD-10 coding.
 - Consider prescription if clinically appropriate.
 - Provide patient education.
 - Arrange follow-up if required.
@@ -146,7 +176,7 @@ ICD-10 SUGGESTIONS
 - To be confirmed by clinician.
 
 TASKS
-- Review note.
+- Review clinical note.
 - Confirm diagnosis.
 - Confirm treatment plan.
 - Save consultation.
@@ -158,15 +188,12 @@ TASKS
   return (
     <main style={styles.page}>
       <div style={styles.card}>
-        <Link href="/" style={styles.back}>
-          ← Back
-        </Link>
+        <Link href="/" style={styles.back}>← Back</Link>
 
         <p style={styles.kicker}>Videomed Clinical Assistant</p>
         <h1 style={styles.title}>New Consultation</h1>
         <p style={styles.subtitle}>
-          Select a patient, confirm consent, record the consultation and generate
-          a clinical SOAP note.
+          Select a patient, confirm consent, record the consultation and generate a clinical SOAP note.
         </p>
 
         <section style={styles.section}>
@@ -191,11 +218,8 @@ TASKS
                   onClick={() => setSelectedPatient(p)}
                   style={styles.patientButton}
                 >
-                  <strong>
-                    {p.firstName} {p.surname}
-                  </strong>
-                  <br />
-                  ID: {p.idNumber} | Age: {p.age} | {p.gender}
+                  <strong>{p.firstName} {p.surname}</strong>
+                  <span>ID: {p.idNumber} | Age: {p.age} | {p.gender}</span>
                 </button>
               ))}
             </div>
@@ -203,11 +227,9 @@ TASKS
 
           {selectedPatient && (
             <div style={styles.selected}>
-              Selected:{" "}
-              <strong>
-                {selectedPatient.firstName} {selectedPatient.surname}
-              </strong>{" "}
-              | ID: {selectedPatient.idNumber}
+              Selected: <strong>{selectedPatient.firstName} {selectedPatient.surname}</strong>
+              <br />
+              ID: {selectedPatient.idNumber} | Age: {selectedPatient.age} | {selectedPatient.gender}
             </div>
           )}
         </section>
@@ -220,10 +242,10 @@ TASKS
               type="checkbox"
               checked={consent}
               onChange={(e) => setConsent(e.target.checked)}
+              style={styles.checkbox}
             />
             <span>
-              I have the patient’s consent to use CareScriber AI for clinical
-              documentation.
+              I have the patient’s consent to use CareScriber AI for clinical documentation.
             </span>
           </label>
         </section>
@@ -248,7 +270,7 @@ TASKS
               disabled={!recording}
               style={{
                 ...styles.dangerButton,
-                opacity: !recording ? 0.5 : 1,
+                opacity: !recording ? 0.45 : 1,
               }}
             >
               ⏹ Stop Recording
@@ -264,7 +286,10 @@ TASKS
 
           <textarea
             value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
+            onChange={(e) => {
+              finalTranscriptRef.current = e.target.value;
+              setTranscript(e.target.value);
+            }}
             placeholder="Transcript will appear here. You can also type or edit notes manually."
             style={styles.textarea}
           />
@@ -288,23 +313,22 @@ TASKS
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
-    background: "#f4f7fb",
-    padding: "20px",
-    fontFamily:
-      "Arial, Helvetica, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    background: "#eef4fb",
+    padding: "18px",
+    fontFamily: "Arial, Helvetica, sans-serif",
     color: "#0f172a",
   },
   card: {
-    maxWidth: "900px",
+    maxWidth: "860px",
     margin: "0 auto",
     background: "#ffffff",
-    borderRadius: "24px",
-    padding: "24px",
-    boxShadow: "0 12px 40px rgba(15, 23, 42, 0.12)",
+    borderRadius: "22px",
+    padding: "22px",
+    boxShadow: "0 12px 36px rgba(15,23,42,0.12)",
   },
   back: {
     display: "inline-block",
-    marginBottom: "20px",
+    marginBottom: "18px",
     color: "#2563eb",
     textDecoration: "none",
     fontWeight: 700,
@@ -315,25 +339,24 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "8px",
   },
   title: {
-    fontSize: "clamp(36px, 8vw, 64px)",
+    fontSize: "clamp(34px, 8vw, 58px)",
     lineHeight: 1,
     margin: "0 0 16px",
     fontWeight: 800,
   },
   subtitle: {
-    fontSize: "20px",
+    fontSize: "18px",
     color: "#475569",
-    marginBottom: "28px",
     lineHeight: 1.5,
   },
   section: {
-    marginTop: "28px",
-    paddingTop: "24px",
+    marginTop: "26px",
+    paddingTop: "22px",
     borderTop: "1px solid #e2e8f0",
   },
   heading: {
     fontSize: "28px",
-    marginBottom: "16px",
+    margin: "0 0 16px",
     fontWeight: 800,
   },
   input: {
@@ -341,7 +364,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "16px",
     borderRadius: "14px",
     border: "1px solid #cbd5e1",
-    fontSize: "18px",
+    fontSize: "17px",
     boxSizing: "border-box",
   },
   textarea: {
@@ -350,7 +373,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "16px",
     borderRadius: "14px",
     border: "1px solid #cbd5e1",
-    fontSize: "18px",
+    fontSize: "17px",
     boxSizing: "border-box",
     resize: "vertical",
   },
@@ -367,6 +390,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#eff6ff",
     fontSize: "16px",
     cursor: "pointer",
+    display: "grid",
+    gap: "6px",
   },
   selected: {
     marginTop: "14px",
@@ -383,38 +408,43 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "18px",
     lineHeight: 1.4,
   },
+  checkbox: {
+    width: "22px",
+    height: "22px",
+    marginTop: "2px",
+  },
   buttonRow: {
     display: "flex",
     gap: "12px",
     flexWrap: "wrap",
   },
   primaryButton: {
-    padding: "16px 22px",
+    padding: "15px 22px",
     borderRadius: "16px",
     border: "none",
     background: "#16a34a",
     color: "#ffffff",
     fontWeight: 800,
-    fontSize: "17px",
+    fontSize: "16px",
   },
   dangerButton: {
-    padding: "16px 22px",
+    padding: "15px 22px",
     borderRadius: "16px",
     border: "none",
     background: "#dc2626",
     color: "#ffffff",
     fontWeight: 800,
-    fontSize: "17px",
+    fontSize: "16px",
   },
   secondaryButton: {
     marginTop: "14px",
-    padding: "16px 22px",
+    padding: "15px 22px",
     borderRadius: "16px",
     border: "none",
     background: "#2563eb",
     color: "#ffffff",
     fontWeight: 800,
-    fontSize: "17px",
+    fontSize: "16px",
   },
   recording: {
     marginTop: "12px",
@@ -434,7 +464,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   noteBox: {
     marginTop: "28px",
-    padding: "20px",
+    padding: "18px",
     borderRadius: "20px",
     background: "#f8fafc",
     border: "1px solid #e2e8f0",
