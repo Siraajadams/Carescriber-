@@ -71,7 +71,7 @@ export default function NewConsultationPage() {
 
   const filteredPatients = useMemo(() => {
     const q = search.toLowerCase().trim();
-    if (!q) return [];
+    if (!q || selectedPatient) return [];
 
     return patients.filter((p) => {
       const searchable = `
@@ -83,7 +83,19 @@ export default function NewConsultationPage() {
 
       return searchable.includes(q);
     });
-  }, [patients, search]);
+  }, [patients, search, selectedPatient]);
+
+  function selectPatient(patient: Patient) {
+    setSelectedPatient(patient);
+    setSearch("");
+    setMessage("");
+  }
+
+  function changePatient() {
+    setSelectedPatient(null);
+    setSearch("");
+    setNote("");
+  }
 
   function startRecording() {
     setMessage("");
@@ -109,18 +121,18 @@ export default function NewConsultationPage() {
       let interim = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript;
+        const text = event.results[i][0].transcript.trim();
 
         if (event.results[i].isFinal) {
-          if (!finalTranscript.includes(text.trim())) {
-            finalTranscript += " " + text.trim();
+          if (text && !finalTranscript.includes(text)) {
+            finalTranscript = `${finalTranscript} ${text}`.trim();
           }
         } else {
-          interim += text;
+          interim = `${interim} ${text}`.trim();
         }
       }
 
-      setTranscript((finalTranscript + " " + interim).trim());
+      setTranscript(`${finalTranscript} ${interim}`.trim());
     };
 
     recognition.onerror = () => {
@@ -214,6 +226,7 @@ ICD-10 SUGGESTIONS
 
         <p style={styles.kicker}>Videomed Clinical Assistant</p>
         <h1 style={styles.title}>New Consultation</h1>
+
         <p style={styles.subtitle}>
           Select a patient, confirm consent, record the consultation and generate
           a clinical SOAP note.
@@ -227,24 +240,23 @@ ICD-10 SUGGESTIONS
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
-            setSelectedPatient(null);
+            if (selectedPatient) setSelectedPatient(null);
           }}
           placeholder="Search by surname, first name, ID number or mobile"
           style={styles.input}
         />
 
-        {search && filteredPatients.length === 0 && (
-          <p style={styles.muted}>No matching patient found.</p>
-        )}
+        {search.trim() !== "" &&
+          filteredPatients.length === 0 &&
+          !selectedPatient && (
+            <p style={styles.muted}>No matching patient found.</p>
+          )}
 
         {filteredPatients.map((p) => (
           <button
             key={p.id}
             type="button"
-            onClick={() => {
-              setSelectedPatient(p);
-              setSearch(`${p.first_name} ${p.surname}`);
-            }}
+            onClick={() => selectPatient(p)}
             style={styles.patientCard}
           >
             <strong>
@@ -259,8 +271,18 @@ ICD-10 SUGGESTIONS
 
         {selectedPatient && (
           <div style={styles.selected}>
-            Selected: {selectedPatient.first_name} {selectedPatient.surname} · ID:{" "}
-            {selectedPatient.id_number}
+            <strong>
+              Selected: {selectedPatient.first_name} {selectedPatient.surname}
+            </strong>
+            <br />
+            ID: {selectedPatient.id_number || "Not captured"}
+            <br />
+            Age: {selectedPatient.age || "Not captured"} ·{" "}
+            {selectedPatient.gender || "Not captured"}
+            <br />
+            <button type="button" onClick={changePatient} style={styles.changeButton}>
+              Change Patient
+            </button>
           </div>
         )}
 
@@ -290,10 +312,7 @@ ICD-10 SUGGESTIONS
             type="button"
             onClick={startRecording}
             disabled={recording}
-            style={{
-              ...styles.primaryButton,
-              opacity: recording ? 0.5 : 1,
-            }}
+            style={{ ...styles.primaryButton, opacity: recording ? 0.5 : 1 }}
           >
             🎙 Start Recording
           </button>
@@ -302,10 +321,7 @@ ICD-10 SUGGESTIONS
             type="button"
             onClick={stopRecording}
             disabled={!recording}
-            style={{
-              ...styles.dangerButton,
-              opacity: !recording ? 0.5 : 1,
-            }}
+            style={{ ...styles.dangerButton, opacity: !recording ? 0.5 : 1 }}
           >
             ⏹ Stop Recording
           </button>
@@ -422,12 +438,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   selected: {
     marginTop: "18px",
-    padding: "16px",
+    padding: "18px",
     background: "#dcfce7",
-    borderRadius: "16px",
+    borderRadius: "18px",
     color: "#166534",
     fontWeight: 800,
     fontSize: "18px",
+    lineHeight: 1.5,
+  },
+  changeButton: {
+    marginTop: "12px",
+    border: "1px solid #86efac",
+    background: "#ffffff",
+    borderRadius: "12px",
+    padding: "10px 14px",
+    color: "#166534",
+    fontWeight: 800,
+    cursor: "pointer",
   },
   checkboxRow: {
     display: "flex",
