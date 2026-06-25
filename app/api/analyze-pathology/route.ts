@@ -1,99 +1,99 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 
+export const runtime = "nodejs";
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 export async function POST(req: NextRequest) {
   try {
-    const form = await req.formData();
+    const formData = await req.formData();
+    const image = formData.get("image");
 
-    const file = form.get("image") as File | null;
-
-    if (!file) {
+    if (!image || !(image instanceof File)) {
       return NextResponse.json(
         { error: "No pathology image uploaded." },
         { status: 400 }
       );
     }
 
-    const bytes = await file.arrayBuffer();
-
+    const bytes = await image.arrayBuffer();
     const base64 = Buffer.from(bytes).toString("base64");
+    const mimeType = image.type || "image/jpeg";
 
-    const mime = file.type || "image/jpeg";
-
-    const response = await openai.chat.completions.create({
+    const result = await openai.chat.completions.create({
       model: "gpt-4.1",
-
+      temperature: 0.2,
+      max_tokens: 1800,
       messages: [
         {
           role: "system",
-          content: `
-You are an experienced physician.
-
-Analyse pathology reports only.
-
-Return:
-
-1. Overall Clinical Summary
-
-2. Important Abnormal Results
-
-3. Possible Diagnoses
-
-4. Recommended Further Investigations
-
-5. Suggested Treatment Plan
-
-6. Medication Considerations
-
-7. Red Flags
-
-8. Follow-up Recommendations
-
-Always mention that recommendations require clinician review.
-`
+          content:
+            "You are a clinical assistant. Analyse pathology/lab report images for clinician review only. Do not make a final diagnosis. Always advise clinician confirmation.",
         },
-
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: "Please analyse this pathology report."
+              text: `
+Analyse this pathology report image.
+
+Return in this structure:
+
+PATHOLOGY SUMMARY
+- Brief clinical interpretation
+
+ABNORMAL RESULTS
+- List abnormal or concerning values
+- Include reference ranges if visible
+
+POSSIBLE CLINICAL SIGNIFICANCE
+- Explain what the results may suggest
+
+POSSIBLE DIFFERENTIALS
+- Possible conditions to consider
+
+SUGGESTED TREATMENT PLAN
+- General management suggestions only
+- Mention urgent actions if required
+
+RECOMMENDED FOLLOW-UP
+- Repeat tests
+- Additional investigations
+- Referral recommendations
+
+RED FLAGS
+- Urgent warning signs
+
+CLINICIAN CONFIRMATION
+- This AI analysis must be reviewed and confirmed by the responsible clinician.
+              `,
             },
             {
               type: "image_url",
               image_url: {
-                url: `data:${mime};base64,${base64}`
-              }
-            }
-          ]
-        }
+                url: `data:${mimeType};base64,${base64}`,
+              },
+            },
+          ],
+        },
       ],
-
-      temperature: 0.2,
-
-      max_tokens: 1800
     });
 
-    return NextResponse.json({
-      analysis: response.choices[0].message.content,
-    });
+    const analysis =
+      result.choices?.[0]?.message?.content ||
+      "No analysis returned from AI.";
 
-  } catch (err: any) {
-
-    console.error(err);
+    return NextResponse.json({ analysis });
+  } catch (error: any) {
+    console.error("Pathology analysis error:", error);
 
     return NextResponse.json(
-      {
-        error: err.message,
-      },
-      {
-        status: 500,
-      }
+      { error: error.message || "Failed to analyse pathology image." },
+      { status: 500 }
     );
   }
 }
