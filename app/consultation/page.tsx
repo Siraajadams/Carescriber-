@@ -85,7 +85,7 @@ export default function ConsultationPage() {
 
   useEffect(() => {
     loadPatients();
-    loadRecentConsultations();
+    setRecentConsultations([]);
 
     return () => {
       shouldKeepRecordingRef.current = false;
@@ -122,15 +122,25 @@ export default function ConsultationPage() {
     );
   }
 
-  async function loadRecentConsultations() {
+  async function loadRecentConsultations(patientId?: string) {
+    const activePatientId = patientId || selectedPatient?.id;
+
+    // Privacy protection: never show global consultations on this page.
+    // Recent consultations must always be filtered to the selected patient only.
+    if (!activePatientId) {
+      setRecentConsultations([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("consultations")
       .select("*")
+      .eq("patient_id", activePatientId)
       .order("created_at", { ascending: false })
       .limit(20);
 
     if (error) {
-      setMessage("Could not load recent consultations: " + error.message);
+      setMessage("Could not load this patient's recent consultations: " + error.message);
       return;
     }
 
@@ -147,14 +157,7 @@ export default function ConsultationPage() {
     });
   }, [patients, search, selectedPatient]);
 
-  function selectPatient(patient: Patient) {
-    setSelectedPatient(patient);
-    setSearch("");
-    setSelectedConsultation(null);
-    setMessage("");
-  }
-
-  function startNewConsultation() {
+  function clearClinicalWorkspace() {
     stopRecording();
     setSelectedConsultation(null);
     setTranscript("");
@@ -163,14 +166,55 @@ export default function ConsultationPage() {
     setClinicalSummary("");
     setPlan("");
     setDiagnosis("");
-    setConsent(false);
     finalTranscriptRef.current = "";
     lastFinalRef.current = "";
-    setMessage("Ready for a new consultation.");
+  }
+
+  function selectPatient(patient: Patient) {
+    clearClinicalWorkspace();
+    setSelectedPatient(patient);
+    setSearch("");
+    setConsent(false);
+    setMessage("Patient selected. Start a new consultation for this patient only.");
+    loadRecentConsultations(patient.id);
+  }
+
+  function changePatient() {
+    clearClinicalWorkspace();
+    setSelectedPatient(null);
+    setSearch("");
+    setConsent(false);
+    setRecentConsultations([]);
+    setMessage("Patient cleared. Select the correct patient before recording or saving.");
+  }
+
+  function startNewConsultation() {
+    clearClinicalWorkspace();
+    setConsent(false);
+    if (selectedPatient) loadRecentConsultations(selectedPatient.id);
+    setMessage(selectedPatient ? "Ready for a new consultation for the selected patient." : "Select a patient before starting a consultation.");
   }
 
   function openConsultation(c: Consultation) {
     stopRecording();
+
+    if (!c.patient_id) {
+      setMessage("This consultation has no patient_id and was blocked for confidentiality. Please recreate it under the correct patient.");
+      return;
+    }
+
+    if (selectedPatient && c.patient_id !== selectedPatient.id) {
+      setMessage("Blocked: this consultation belongs to another patient. It was not opened.");
+      return;
+    }
+
+    const patient = patients.find((p) => p.id === c.patient_id);
+    if (!patient) {
+      setMessage("Could not verify the patient for this consultation. It was not opened for confidentiality.");
+      return;
+    }
+
+    setSelectedPatient(patient);
     setSelectedConsultation(c);
     setTranscript(c.transcript || "");
     setSoapNote(c.soap_note || "");
@@ -179,11 +223,10 @@ export default function ConsultationPage() {
     setPlan(c.plan || "");
     setDiagnosis(c.diagnosis || "");
     setConsent(Boolean(c.consent_confirmed));
+    setSearch("");
+    loadRecentConsultations(patient.id);
 
-    const patient = patients.find((p) => p.id === c.patient_id);
-    if (patient) setSelectedPatient(patient);
-
-    setMessage("Consultation opened for review. You may edit and save again.");
+    setMessage("Consultation opened for this verified patient only. You may edit and save again.");
   }
 
   function startRecording() {
@@ -323,6 +366,11 @@ export default function ConsultationPage() {
       return;
     }
 
+    if (selectedConsultation?.patient_id && selectedConsultation.patient_id !== selectedPatient.id) {
+      setMessage("Blocked: cannot save this consultation under a different patient.");
+      return;
+    }
+
     setSaving(true);
     setMessage("");
 
@@ -350,8 +398,8 @@ export default function ConsultationPage() {
     }
 
     setSelectedConsultation(result.data);
-    setMessage("Consultation saved successfully.");
-    loadRecentConsultations();
+    setMessage("Consultation saved successfully for the selected patient only.");
+    loadRecentConsultations(selectedPatient.id);
   }
 
   function downloadPdf() {
@@ -410,7 +458,7 @@ export default function ConsultationPage() {
 
         <div style={styles.actionGrid}>
           <button type="button" onClick={startNewConsultation} style={styles.secondaryButton}>+ New Consultation</button>
-          <button type="button" onClick={loadRecentConsultations} style={styles.secondaryButton}>Refresh Recent</button>
+          <button type="button" onClick={() => loadRecentConsultations()} style={styles.secondaryButton}>Refresh This Patient</button>
         </div>
 
         <hr style={styles.divider} />
@@ -418,10 +466,7 @@ export default function ConsultationPage() {
         <h2 style={styles.sectionTitle}>Find Patient</h2>
         <input
           value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setSelectedPatient(null);
-          }}
+          onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by surname, first name, ID number or mobile"
           style={styles.input}
         />
@@ -440,7 +485,8 @@ export default function ConsultationPage() {
             <strong>Selected: {selectedPatient.first_name} {selectedPatient.surname}</strong><br />
             ID: {selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}<br />
             Age: {selectedPatient.age || "Not captured"} · {selectedPatient.gender || "Not captured"}<br />
-            Allergies: {selectedPatient.allergies || "No known allergies"}
+            Allergies: {selectedPatient.allergies || "No known allergies"}<br />
+            <button type="button" onClick={changePatient} style={styles.changeButton}>Change Patient</button>
           </div>
         )}
 
@@ -498,8 +544,10 @@ export default function ConsultationPage() {
         <hr style={styles.divider} />
 
         <h2 style={styles.sectionTitle}>Recent Consultations</h2>
-        {recentConsultations.length === 0 ? (
-          <p style={styles.muted}>No recent consultations yet.</p>
+        {!selectedPatient ? (
+          <p style={styles.muted}>Select a patient to view that patient's consultations. Global consultation history is hidden for confidentiality.</p>
+        ) : recentConsultations.length === 0 ? (
+          <p style={styles.muted}>No recent consultations for this patient yet.</p>
         ) : (
           recentConsultations.map((c) => (
             <button key={c.id} type="button" onClick={() => openConsultation(c)} style={styles.recentCard}>
@@ -528,6 +576,7 @@ const styles: Record<string, React.CSSProperties> = {
   muted: { color: "#64748b", fontSize: "18px", marginTop: "18px" },
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: "20px", padding: "18px", marginTop: "14px", display: "grid", gap: "8px", fontSize: "18px", cursor: "pointer" },
   selected: { marginTop: "18px", padding: "18px", background: "#dcfce7", borderRadius: "18px", color: "#166534", fontWeight: 800, fontSize: "17px", lineHeight: 1.5 },
+  changeButton: { marginTop: "12px", border: "1px solid #86efac", background: "#ffffff", borderRadius: "12px", padding: "10px 14px", color: "#166534", fontWeight: 800, cursor: "pointer" },
   checkboxRow: { display: "flex", gap: "16px", fontSize: "20px", lineHeight: 1.4 },
   checkbox: { width: "26px", height: "26px", marginTop: "3px" },
   buttonRow: { display: "grid", gap: "16px" },
