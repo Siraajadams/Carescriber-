@@ -1,43 +1,59 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
-
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY!,
 });
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const formData = await request.formData();
-    const file = formData.get("file");
-    const language = String(formData.get("language") || "en");
-    const prompt = String(
-      formData.get("prompt") ||
-        "Clinical consultation. Preserve medical terminology, medicine names, doses and abbreviations. Do not duplicate phrases.",
-    );
+    const formData = await req.formData();
 
-    if (!(file instanceof File)) {
+    const audio = formData.get("audio");
+
+    if (!audio || !(audio instanceof File)) {
       return NextResponse.json(
-        { error: "No audio file received." },
-        { status: 400 },
+        { error: "No audio file uploaded." },
+        { status: 400 }
       );
     }
 
     const transcription = await openai.audio.transcriptions.create({
-      model: "gpt-4o-mini-transcribe",
-      file,
-      language,
-      prompt,
-      response_format: "json",
-      temperature: 0,
+      file: audio,
+      model: "gpt-4o-transcribe",
+      language: "en",
+      prompt: `
+You are a clinical medical transcription assistant.
+
+Rules:
+- Produce a clean clinical transcript.
+- NEVER repeat words or sentences.
+- Correct medical terminology.
+- Preserve medicine names.
+- Preserve diagnoses.
+- Remove filler words like "uh", "erm", "okay".
+- Return ONLY the transcript.
+`,
     });
 
-    return NextResponse.json({ text: transcription.text || "" });
+    const cleaned = transcription.text
+      .replace(/\b(uh|um|erm|ah)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return NextResponse.json({
+      transcript: cleaned,
+    });
   } catch (error: any) {
+    console.error(error);
+
     return NextResponse.json(
-      { error: error?.message || "Transcription failed." },
-      { status: 500 },
+      {
+        error: error.message,
+      },
+      {
+        status: 500,
+      }
     );
   }
 }
