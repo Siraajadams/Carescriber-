@@ -20,18 +20,31 @@ export async function POST(req: NextRequest) {
     }
 
     const bytes = await image.arrayBuffer();
-    const base64 = Buffer.from(bytes).toString("base64");
+    const base64Image = Buffer.from(bytes).toString("base64");
     const mimeType = image.type || "image/jpeg";
 
-    const result = await openai.chat.completions.create({
+    const response = await openai.chat.completions.create({
       model: "gpt-4.1",
       temperature: 0.2,
-      max_tokens: 1800,
+      max_tokens: 2000,
       messages: [
         {
           role: "system",
-          content:
-            "You are a clinical assistant. Analyse pathology/lab report images for clinician review only. Do not make a final diagnosis. Always advise clinician confirmation.",
+          content: `
+You are a clinical pathology interpretation assistant.
+
+You analyse pathology/laboratory report images for clinician review only.
+
+Rules:
+- Do not provide a final diagnosis.
+- Do not prescribe as a doctor.
+- Identify visible values accurately.
+- Highlight abnormal results.
+- Suggest possible clinical significance.
+- Suggest reasonable next investigations.
+- Suggest a possible treatment/management plan for clinician review.
+- Always state that the responsible clinician must confirm the findings.
+          `,
         },
         {
           role: "user",
@@ -41,41 +54,40 @@ export async function POST(req: NextRequest) {
               text: `
 Analyse this pathology report image.
 
-Return in this structure:
+Return the answer in this exact format:
 
 PATHOLOGY SUMMARY
-- Brief clinical interpretation
+Briefly summarise the report.
 
-ABNORMAL RESULTS
-- List abnormal or concerning values
-- Include reference ranges if visible
+KEY RESULTS IDENTIFIED
+List the visible test names, values, units and reference ranges if visible.
+
+ABNORMAL OR CONCERNING RESULTS
+List abnormal values and explain why they may be important.
 
 POSSIBLE CLINICAL SIGNIFICANCE
-- Explain what the results may suggest
+Explain what the results may suggest clinically.
 
-POSSIBLE DIFFERENTIALS
-- Possible conditions to consider
+POSSIBLE DIFFERENTIAL DIAGNOSES
+List possible conditions to consider.
 
-SUGGESTED TREATMENT PLAN
-- General management suggestions only
-- Mention urgent actions if required
+SUGGESTED TREATMENT / MANAGEMENT PLAN
+Provide general clinician-review management suggestions only.
 
-RECOMMENDED FOLLOW-UP
-- Repeat tests
-- Additional investigations
-- Referral recommendations
+RECOMMENDED FURTHER INVESTIGATIONS
+Suggest repeat tests, confirmatory tests or referrals.
 
-RED FLAGS
-- Urgent warning signs
+RED FLAGS / URGENT ACTIONS
+Mention anything that may need urgent clinical review.
 
 CLINICIAN CONFIRMATION
-- This AI analysis must be reviewed and confirmed by the responsible clinician.
+State that this AI analysis must be reviewed and confirmed by the responsible clinician.
               `,
             },
             {
               type: "image_url",
               image_url: {
-                url: `data:${mimeType};base64,${base64}`,
+                url: `data:${mimeType};base64,${base64Image}`,
               },
             },
           ],
@@ -84,15 +96,21 @@ CLINICIAN CONFIRMATION
     });
 
     const analysis =
-      result.choices?.[0]?.message?.content ||
-      "No analysis returned from AI.";
+      response.choices?.[0]?.message?.content ||
+      "No pathology analysis returned.";
 
-    return NextResponse.json({ analysis });
+    return NextResponse.json({
+      success: true,
+      analysis,
+    });
   } catch (error: any) {
     console.error("Pathology analysis error:", error);
 
     return NextResponse.json(
-      { error: error.message || "Failed to analyse pathology image." },
+      {
+        success: false,
+        error: error.message || "Failed to analyse pathology image.",
+      },
       { status: 500 }
     );
   }
