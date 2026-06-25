@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
@@ -7,43 +7,37 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export async function POST(req: NextRequest) {
+export async function POST(request: Request) {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "OPENAI_API_KEY is missing in Vercel environment variables." },
-        { status: 500 }
-      );
-    }
+    const formData = await request.formData();
+    const file = formData.get("file");
+    const language = String(formData.get("language") || "en");
+    const prompt = String(
+      formData.get("prompt") ||
+        "Clinical consultation. Preserve medical terminology, medicine names, doses and abbreviations. Do not duplicate phrases.",
+    );
 
-    const formData = await req.formData();
-    const audio = formData.get("audio");
-
-    if (!audio || !(audio instanceof File)) {
+    if (!(file instanceof File)) {
       return NextResponse.json(
         { error: "No audio file received." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const transcription = await openai.audio.transcriptions.create({
-      file: audio,
       model: "gpt-4o-mini-transcribe",
+      file,
+      language,
+      prompt,
+      response_format: "json",
+      temperature: 0,
     });
 
-    return NextResponse.json({
-      text: transcription.text || "",
-    });
+    return NextResponse.json({ text: transcription.text || "" });
   } catch (error: any) {
-    console.error("Transcription error:", error);
-
     return NextResponse.json(
-      {
-        error:
-          error?.message ||
-          "Transcription failed. Please check OpenAI API key and audio format.",
-      },
-      { status: 500 }
+      { error: error?.message || "Transcription failed." },
+      { status: 500 },
     );
   }
 }
