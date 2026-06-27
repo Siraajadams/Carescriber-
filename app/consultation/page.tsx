@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabase";
 
@@ -9,6 +9,7 @@ type Patient = {
   first_name: string;
   surname: string;
   id_number?: string;
+  patient_id?: string;
   age?: number | null;
   date_of_birth?: string | null;
   gender?: string;
@@ -16,6 +17,14 @@ type Patient = {
   medical_aid?: string;
   allergies?: string;
   current_medicines?: string;
+};
+
+type Consultation = {
+  id: string;
+  created_at?: string;
+  patient_summary?: string;
+  transcript?: string;
+  soap_note?: string;
 };
 
 declare global {
@@ -27,17 +36,23 @@ declare global {
 
 export default function ConsultationPage() {
   const recognitionRef = useRef<any>(null);
-  const shouldKeepRecordingRef = useRef(false);
+  const keepRecordingRef = useRef(false);
   const finalTranscriptRef = useRef("");
 
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [recent, setRecent] = useState<Consultation[]>([]);
+
   const [search, setSearch] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [consent, setConsent] = useState(false);
+
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const [note, setNote] = useState("");
+  const [soapNote, setSoapNote] = useState("");
   const [message, setMessage] = useState("");
+
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoNote, setPhotoNote] = useState("");
 
   const isInAppBrowser =
     typeof navigator !== "undefined" &&
@@ -45,6 +60,7 @@ export default function ConsultationPage() {
 
   useEffect(() => {
     loadPatients();
+    loadRecent();
   }, []);
 
   async function loadPatients() {
@@ -54,44 +70,73 @@ export default function ConsultationPage() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      setMessage("Could not load patients: " + error.message);
+      setMessage("Patient load error: " + error.message);
       return;
     }
 
-    setPatients(
-      (data || []).map((p: any) => ({
-        id: p.id,
-        first_name: p.first_name || p.name || "",
-        surname: p.surname || p.last_name || "",
-        id_number: p.id_number || p.patient_id || "",
-        age: p.age || null,
-        date_of_birth: p.date_of_birth || p.dob || null,
-        gender: p.gender || "",
-        mobile: p.mobile || p.mobile_number || "",
-        medical_aid: p.medical_aid || "",
-        allergies: p.allergies || "No known allergies",
-        current_medicines: p.current_medicines || "",
-      }))
-    );
+    const mapped = (data || []).map((p: any) => ({
+      id: p.id,
+      first_name: p.first_name || p.name || "",
+      surname: p.surname || p.last_name || "",
+      id_number: p.id_number || p.patient_id || "",
+      patient_id: p.patient_id || p.id_number || "",
+      age: p.age || null,
+      date_of_birth: p.date_of_birth || p.dob || null,
+      gender: p.gender || "",
+      mobile: p.mobile || p.mobile_number || "",
+      medical_aid: p.medical_aid || "",
+      allergies: p.allergies || "No known allergies",
+      current_medicines: p.current_medicines || "",
+    }));
+
+    setPatients(mapped);
+  }
+
+  async function loadRecent() {
+    const { data } = await supabase
+      .from("consultations")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    setRecent((data || []) as Consultation[]);
   }
 
   const filteredPatients = useMemo(() => {
-    const q = search.toLowerCase().trim();
+    const q = search.trim().toLowerCase();
+
     if (!q || selectedPatient) return [];
 
-    return patients.filter((p) =>
-      `${p.first_name} ${p.surname} ${p.id_number} ${p.mobile}`
-        .toLowerCase()
-        .includes(q)
-    );
+    return patients.filter((p) => {
+      const text = [
+        p.first_name,
+        p.surname,
+        p.id_number,
+        p.patient_id,
+        p.mobile,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return text.includes(q);
+    });
   }, [patients, search, selectedPatient]);
 
+  function selectPatient(p: Patient) {
+    setSelectedPatient(p);
+    setSearch(`${p.first_name} ${p.surname}`.trim());
+    setMessage("");
+  }
+
   function newConsultation() {
+    stopRecording();
     setSelectedPatient(null);
     setSearch("");
     setConsent(false);
     setTranscript("");
-    setNote("");
+    setSoapNote("");
+    setPhotoPreview(null);
+    setPhotoNote("");
     setMessage("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -100,92 +145,119 @@ export default function ConsultationPage() {
     setMessage("");
 
     if (isInAppBrowser) {
-      setMessage(
-        "Microphone may not work inside WhatsApp. Open CareScriber in Safari or Chrome."
-      );
+      setMessage("Please open CareScriber in Safari or Chrome. WhatsApp browser often blocks microphone access.");
     }
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setMessage("Speech recognition is not supported. Use Safari or Chrome.");
+      setMessage("Speech recognition is not supported on this browser. Use Chrome or Safari.");
       return;
     }
 
-    shouldKeepRecordingRef.current = true;
+    keepRecordingRef.current = true;
     finalTranscriptRef.current = transcript.trim();
 
-    const startNewRecognition = () => {
-      if (!shouldKeepRecordingRef.current) return;
+    const startSession = () => {
+      if (!keepRecordingRef.current) return;
 
-      const recognition = new SpeechRecognition();
-      recognitionRef.current = recognition;
+      try {
+        const recognition = new SpeechRecognition();
+        recognitionRef.current = recognition;
 
-      recognition.lang = "en-ZA";
-      recognition.continuous = true;
-      recognition.interimResults = true;
+        recognition.lang = "en-ZA";
+        recognition.continuous = true;
+        recognition.interimResults = true;
 
-      recognition.onresult = (event: any) => {
-        let interimText = "";
+        recognition.onstart = () => {
+          setRecording(true);
+          setMessage("Recording started. Speak clearly.");
+        };
 
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const text = event.results[i][0].transcript.trim();
+        recognition.onresult = (event: any) => {
+          let interim = "";
 
-          if (event.results[i].isFinal) {
-            if (
-              text &&
-              !finalTranscriptRef.current.toLowerCase().endsWith(text.toLowerCase())
-            ) {
-              finalTranscriptRef.current =
-                `${finalTranscriptRef.current} ${text}`.trim();
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const text = event.results[i][0].transcript.trim();
+
+            if (event.results[i].isFinal) {
+              const current = finalTranscriptRef.current.toLowerCase();
+              const incoming = text.toLowerCase();
+
+              if (text && !current.endsWith(incoming)) {
+                finalTranscriptRef.current = `${finalTranscriptRef.current} ${text}`.trim();
+              }
+            } else {
+              interim = `${interim} ${text}`.trim();
             }
-          } else {
-            interimText = `${interimText} ${text}`.trim();
           }
-        }
 
-        setTranscript(`${finalTranscriptRef.current} ${interimText}`.trim());
-      };
+          setTranscript(`${finalTranscriptRef.current} ${interim}`.trim());
+        };
 
-      recognition.onerror = (event: any) => {
-        if (event.error === "not-allowed") {
-          setMessage("Microphone permission denied.");
-          shouldKeepRecordingRef.current = false;
-          setRecording(false);
-        }
-      };
+        recognition.onerror = (event: any) => {
+          if (event.error === "not-allowed") {
+            keepRecordingRef.current = false;
+            setRecording(false);
+            setMessage("Microphone permission denied. Allow microphone access in browser settings.");
+          } else {
+            setMessage("Recording issue: " + event.error);
+          }
+        };
 
-      recognition.onend = () => {
-        if (shouldKeepRecordingRef.current) {
-          setTimeout(startNewRecognition, 700);
-        } else {
-          setRecording(false);
-        }
-      };
+        recognition.onend = () => {
+          if (keepRecordingRef.current) {
+            setTimeout(startSession, 800);
+          } else {
+            setRecording(false);
+          }
+        };
 
-      recognition.start();
-      setRecording(true);
+        recognition.start();
+      } catch {
+        setMessage("Could not start microphone. Refresh page and try again.");
+        setRecording(false);
+      }
     };
 
-    startNewRecognition();
+    startSession();
   }
 
   function stopRecording() {
-    shouldKeepRecordingRef.current = false;
-    recognitionRef.current?.stop();
+    keepRecordingRef.current = false;
+
+    try {
+      recognitionRef.current?.stop();
+    } catch {}
+
     setRecording(false);
-    setMessage("Recording stopped. You can edit the transcript.");
   }
 
-  async function generateSoapNote() {
-    if (!selectedPatient) return setMessage("Please select a patient first.");
-    if (!consent) return setMessage("Please confirm AI consent first.");
+  function handlePhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+
+    if (!file) return;
+
+    setPhotoPreview(URL.createObjectURL(file));
+    setPhotoNote("Image captured. Clinician can review before completing SOAP note.");
+  }
+
+  async function generateSoap() {
+    if (!selectedPatient) {
+      setMessage("Please select a patient first.");
+      return;
+    }
+
+    if (!consent) {
+      setMessage("Please confirm AI consent first.");
+      return;
+    }
 
     const generated = `
 PATIENT SUMMARY
 Name: ${selectedPatient.first_name} ${selectedPatient.surname}
-ID Number: ${selectedPatient.id_number || "Not captured"}
+ID Number: ${selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}
 Age: ${selectedPatient.age || "Not captured"}
 DOB: ${selectedPatient.date_of_birth || "Not captured"}
 Gender: ${selectedPatient.gender || "Not captured"}
@@ -197,20 +269,22 @@ Current Medicines: ${selectedPatient.current_medicines || "Not captured"}
 CONSENT
 Patient consented to AI-assisted clinical documentation.
 
-TRANSCRIPT
+TRANSCRIPT / CLINICAL NOTES
 ${transcript || "No transcript captured."}
 
 SOAP NOTE
 
 Subjective:
-- Patient reports: ${transcript || "History to be completed."}
+- ${transcript || "Patient history to be completed by clinician."}
 
 Objective:
 - Examination findings to be completed by clinician.
 - Vitals to be added if available.
+${photoNote ? "- Clinical image reviewed: " + photoNote : ""}
 
 Assessment:
 - Clinical impression pending clinician confirmation.
+- Differential diagnosis to be confirmed by clinician.
 
 Plan:
 - Treatment plan to be confirmed by clinician.
@@ -218,20 +292,33 @@ Plan:
 - Consider prescription if clinically appropriate.
 - Provide patient education.
 - Arrange follow-up if required.
+
+ICD-10 SUGGESTIONS
+- To be confirmed by clinician.
+
+REFERRAL / PRESCRIPTION
+- Draft only. Clinician must verify before issuing.
 `;
 
-    setNote(generated);
+    setSoapNote(generated);
 
-    await supabase.from("consultations").insert({
+    const { error } = await supabase.from("consultations").insert({
       patient_id: selectedPatient.id,
       patient_summary: `${selectedPatient.first_name} ${selectedPatient.surname}`,
       transcript,
       soap_note: generated,
       consent_confirmed: consent,
     });
+
+    if (error) {
+      setMessage("SOAP generated, but save failed: " + error.message);
+    } else {
+      setMessage("SOAP note generated and saved.");
+      loadRecent();
+    }
   }
 
-  function printPdf() {
+  function exportPdf() {
     window.print();
   }
 
@@ -240,33 +327,34 @@ Plan:
       <section style={styles.card}>
         <Link href="/dashboard" style={styles.back}>← Back to Dashboard</Link>
 
-        {isInAppBrowser && (
-          <div style={styles.warningBox}>
-            Microphone recording may not work inside WhatsApp. Open this page in Safari or Chrome.
-          </div>
-        )}
-
         <p style={styles.kicker}>Videomed Clinical Assistant</p>
         <h1 style={styles.title}>CareScriber Consultation</h1>
         <p style={styles.subtitle}>
-          Select patient, confirm consent, record, edit transcript and generate SOAP.
+          Select patient, confirm consent, record, edit transcript, generate SOAP and export PDF.
         </p>
 
-        <button onClick={newConsultation} style={styles.secondaryButton}>
+        {isInAppBrowser && (
+          <div style={styles.warning}>
+            Open in Safari or Chrome for microphone recording. WhatsApp browser may block recording.
+          </div>
+        )}
+
+        <button style={styles.lightButton} onClick={newConsultation}>
           + New Consultation
         </button>
 
         <hr style={styles.divider} />
 
-        <h2 style={styles.sectionTitle}>Find Patient</h2>
+        <h2 style={styles.heading}>Find Patient</h2>
+
         <input
+          style={styles.input}
           value={search}
+          placeholder="Search surname, first name, ID or mobile"
           onChange={(e) => {
             setSearch(e.target.value);
             setSelectedPatient(null);
           }}
-          placeholder="Search surname, first name, ID or mobile"
-          style={styles.input}
         />
 
         {search && !selectedPatient && filteredPatients.length === 0 && (
@@ -274,85 +362,347 @@ Plan:
         )}
 
         {filteredPatients.map((p) => (
-          <button key={p.id} onClick={() => setSelectedPatient(p)} style={styles.patientCard}>
+          <button key={p.id} style={styles.patientCard} onClick={() => selectPatient(p)}>
             <strong>{p.first_name} {p.surname}</strong>
-            <span>ID: {p.id_number || "N/A"} · Age: {p.age || "N/A"} · {p.gender || "N/A"}</span>
+            <span>
+              ID: {p.id_number || p.patient_id || "N/A"} · Age: {p.age || "N/A"} · {p.gender || "N/A"}
+            </span>
           </button>
         ))}
 
         {selectedPatient && (
           <div style={styles.selected}>
             Selected: {selectedPatient.first_name} {selectedPatient.surname} · ID:{" "}
-            {selectedPatient.id_number || "Not captured"}
+            {selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}
           </div>
         )}
 
         <hr style={styles.divider} />
 
-        <h2 style={styles.sectionTitle}>AI Consent</h2>
-        <label style={styles.checkboxRow}>
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-          I have the patient’s consent to use CareScriber AI.
+        <h2 style={styles.heading}>AI Consent</h2>
+
+        <label style={styles.checkRow}>
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+          />
+          <span>I have the patient’s consent to use CareScriber AI.</span>
         </label>
 
         <hr style={styles.divider} />
 
-        <h2 style={styles.sectionTitle}>Recording</h2>
-        <button onClick={startRecording} disabled={recording} style={styles.startButton}>
+        <h2 style={styles.heading}>Recording</h2>
+
+        <button
+          style={{
+            ...styles.startButton,
+            opacity: recording ? 0.5 : 1,
+          }}
+          disabled={recording}
+          onClick={startRecording}
+        >
           🎙 Start Recording
         </button>
-        <button onClick={stopRecording} disabled={!recording} style={styles.stopButton}>
+
+        <button
+          style={{
+            ...styles.stopButton,
+            opacity: !recording ? 0.5 : 1,
+          }}
+          disabled={!recording}
+          onClick={stopRecording}
+        >
           ⏹ Stop Recording
         </button>
 
-        {message && <p style={styles.message}>{message}</p>}
+        <hr style={styles.divider} />
+
+        <h2 style={styles.heading}>Camera / Clinical Image</h2>
+
+        <label style={styles.cameraButton}>
+          📷 Capture or Upload Image
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handlePhoto}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {photoPreview && (
+          <img src={photoPreview} alt="Clinical upload" style={styles.preview} />
+        )}
+
+        {photoNote && <p style={styles.muted}>{photoNote}</p>}
 
         <hr style={styles.divider} />
 
-        <h2 style={styles.sectionTitle}>Editable Transcript / Clinical Notes</h2>
+        <h2 style={styles.heading}>Editable Transcript / Clinical Notes</h2>
+
         <textarea
+          style={styles.textarea}
           value={transcript}
           onChange={(e) => setTranscript(e.target.value)}
           placeholder="Transcript will appear here. Clinician can edit before generating SOAP."
-          style={styles.textarea}
         />
 
-        <button onClick={generateSoapNote} style={styles.primaryButton}>
+        <button style={styles.primaryButton} onClick={generateSoap}>
           Generate SOAP Note
         </button>
 
-        {note && (
+        {message && <div style={styles.message}>{message}</div>}
+
+        {soapNote && (
           <>
-            <button onClick={printPdf} style={styles.pdfButton}>Export / Print PDF</button>
-            <pre style={styles.noteBox}>{note}</pre>
+            <button style={styles.pdfButton} onClick={exportPdf}>
+              Export / Print PDF
+            </button>
+
+            <pre style={styles.noteBox}>{soapNote}</pre>
           </>
         )}
+
+        <hr style={styles.divider} />
+
+        <h2 style={styles.heading}>Recent Consultations</h2>
+
+        {recent.length === 0 && <p style={styles.muted}>No recent consultations yet.</p>}
+
+        {recent.map((c) => (
+          <div key={c.id} style={styles.recentCard}>
+            <strong>{c.patient_summary || "Consultation"}</strong>
+            <small>{c.created_at ? new Date(c.created_at).toLocaleString() : ""}</small>
+            <button
+              style={styles.smallButton}
+              onClick={() => {
+                setTranscript(c.transcript || "");
+                setSoapNote(c.soap_note || "");
+                setMessage("Recent consultation loaded.");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            >
+              Open
+            </button>
+          </div>
+        ))}
       </section>
     </main>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  page: { minHeight: "100vh", background: "#eef4fb", padding: 18, fontFamily: "Arial, sans-serif", color: "#0f172a" },
-  card: { maxWidth: 760, margin: "0 auto", background: "white", borderRadius: 28, padding: 28 },
-  back: { color: "#2563eb", fontWeight: 800, textDecoration: "none", fontSize: 18 },
-  warningBox: { background: "#fff7ed", color: "#9a3412", border: "1px solid #fed7aa", borderRadius: 16, padding: 16, fontWeight: 700, marginTop: 20 },
-  kicker: { color: "#2563eb", fontWeight: 900, marginTop: 30 },
-  title: { fontSize: 48, lineHeight: 1, margin: "12px 0", fontWeight: 900 },
-  subtitle: { fontSize: 24, color: "#526174", lineHeight: 1.4 },
-  divider: { border: 0, borderTop: "1px solid #e2e8f0", margin: "32px 0" },
-  sectionTitle: { fontSize: 36, fontWeight: 900 },
-  input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 18, padding: 18, fontSize: 20 },
-  muted: { color: "#64748b", fontSize: 18 },
-  patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, marginTop: 12, display: "grid", gap: 6, fontSize: 18 },
-  selected: { marginTop: 16, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 800 },
-  checkboxRow: { display: "flex", gap: 12, fontSize: 20, lineHeight: 1.4 },
-  startButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#16a34a", color: "white", fontSize: 22, fontWeight: 900, marginBottom: 14 },
-  stopButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#dc2626", color: "white", fontSize: 22, fontWeight: 900 },
-  textarea: { width: "100%", minHeight: 190, border: "2px solid #cbd5e1", borderRadius: 20, padding: 20, fontSize: 20, boxSizing: "border-box" },
-  primaryButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#2563eb", color: "white", fontSize: 22, fontWeight: 900, marginTop: 16 },
-  secondaryButton: { width: "100%", border: 0, borderRadius: 18, padding: 18, background: "#dbeafe", color: "#1d4ed8", fontSize: 20, fontWeight: 900, marginTop: 18 },
-  pdfButton: { width: "100%", border: 0, borderRadius: 18, padding: 18, background: "#0f172a", color: "white", fontSize: 20, fontWeight: 900, marginTop: 18 },
-  message: { background: "#dbeafe", color: "#1e40af", padding: 14, borderRadius: 14, fontWeight: 700 },
-  noteBox: { whiteSpace: "pre-wrap", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, fontSize: 15, marginTop: 18 },
+const styles: Record<string, CSSProperties> = {
+  page: {
+    minHeight: "100vh",
+    background: "#eef4fb",
+    padding: "18px",
+    fontFamily: "Arial, Helvetica, sans-serif",
+    color: "#0f172a",
+  },
+  card: {
+    maxWidth: 760,
+    margin: "0 auto",
+    background: "#ffffff",
+    borderRadius: 28,
+    padding: 28,
+    boxShadow: "0 20px 60px rgba(15, 23, 42, 0.10)",
+  },
+  back: {
+    color: "#2563eb",
+    fontWeight: 800,
+    textDecoration: "none",
+    fontSize: 18,
+  },
+  kicker: {
+    marginTop: 30,
+    color: "#2563eb",
+    fontWeight: 900,
+    fontSize: 18,
+  },
+  title: {
+    fontSize: 48,
+    lineHeight: 1,
+    margin: "12px 0",
+    fontWeight: 900,
+  },
+  subtitle: {
+    fontSize: 22,
+    color: "#526174",
+    lineHeight: 1.45,
+  },
+  warning: {
+    background: "#fff7ed",
+    color: "#9a3412",
+    padding: 16,
+    borderRadius: 16,
+    fontWeight: 800,
+    marginTop: 18,
+  },
+  divider: {
+    border: 0,
+    borderTop: "1px solid #e2e8f0",
+    margin: "32px 0",
+  },
+  heading: {
+    fontSize: 34,
+    fontWeight: 900,
+    marginBottom: 18,
+  },
+  input: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "2px solid #cbd5e1",
+    borderRadius: 20,
+    padding: 18,
+    fontSize: 20,
+  },
+  muted: {
+    color: "#64748b",
+    fontSize: 18,
+  },
+  patientCard: {
+    width: "100%",
+    textAlign: "left",
+    background: "#f8fafc",
+    border: "1px solid #cbd5e1",
+    borderRadius: 18,
+    padding: 18,
+    marginTop: 12,
+    display: "grid",
+    gap: 6,
+    fontSize: 18,
+  },
+  selected: {
+    marginTop: 16,
+    background: "#dcfce7",
+    color: "#166534",
+    padding: 16,
+    borderRadius: 16,
+    fontWeight: 900,
+    fontSize: 17,
+  },
+  checkRow: {
+    display: "flex",
+    gap: 14,
+    alignItems: "flex-start",
+    fontSize: 20,
+    lineHeight: 1.4,
+  },
+  startButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: 22,
+    padding: 22,
+    background: "#16a34a",
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: 900,
+    marginBottom: 14,
+  },
+  stopButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: 22,
+    padding: 22,
+    background: "#dc2626",
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: 900,
+  },
+  cameraButton: {
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box",
+    textAlign: "center",
+    borderRadius: 20,
+    padding: 20,
+    background: "#dbeafe",
+    color: "#1d4ed8",
+    fontWeight: 900,
+    fontSize: 20,
+  },
+  preview: {
+    width: "100%",
+    borderRadius: 18,
+    marginTop: 16,
+    border: "1px solid #cbd5e1",
+  },
+  textarea: {
+    width: "100%",
+    boxSizing: "border-box",
+    minHeight: 210,
+    border: "2px solid #cbd5e1",
+    borderRadius: 22,
+    padding: 20,
+    fontSize: 20,
+    lineHeight: 1.5,
+  },
+  primaryButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: 20,
+    padding: 22,
+    background: "#2563eb",
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: 900,
+    marginTop: 16,
+  },
+  lightButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: 20,
+    padding: 20,
+    background: "#dbeafe",
+    color: "#1d4ed8",
+    fontSize: 20,
+    fontWeight: 900,
+    marginTop: 16,
+  },
+  pdfButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: 20,
+    padding: 20,
+    background: "#0f172a",
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: 900,
+    marginTop: 18,
+  },
+  message: {
+    background: "#e0f2fe",
+    color: "#075985",
+    padding: 14,
+    borderRadius: 14,
+    fontWeight: 800,
+    marginTop: 16,
+  },
+  noteBox: {
+    whiteSpace: "pre-wrap",
+    background: "#f8fafc",
+    border: "1px solid #cbd5e1",
+    borderRadius: 18,
+    padding: 18,
+    fontSize: 15,
+    marginTop: 18,
+    overflowX: "auto",
+  },
+  recentCard: {
+    border: "1px solid #cbd5e1",
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 12,
+    display: "grid",
+    gap: 8,
+  },
+  smallButton: {
+    border: 0,
+    borderRadius: 14,
+    padding: 12,
+    background: "#2563eb",
+    color: "#fff",
+    fontWeight: 900,
+  },
 };
