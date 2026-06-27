@@ -52,7 +52,10 @@ export default function ConsultationPage() {
   const [message, setMessage] = useState("");
 
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoNote, setPhotoNote] = useState("");
+  const [imageAnalysis, setImageAnalysis] = useState("");
+  const [analyzingImage, setAnalyzingImage] = useState(false);
 
   const isInAppBrowser =
     typeof navigator !== "undefined" &&
@@ -136,7 +139,9 @@ export default function ConsultationPage() {
     setTranscript("");
     setSoapNote("");
     setPhotoPreview(null);
+    setPhotoFile(null);
     setPhotoNote("");
+    setImageAnalysis("");
     setMessage("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -145,7 +150,9 @@ export default function ConsultationPage() {
     setMessage("");
 
     if (isInAppBrowser) {
-      setMessage("Please open CareScriber in Safari or Chrome. WhatsApp browser often blocks microphone access.");
+      setMessage(
+        "Please open CareScriber in Safari or Chrome. WhatsApp browser often blocks microphone access."
+      );
     }
 
     const SpeechRecognition =
@@ -239,8 +246,47 @@ export default function ConsultationPage() {
 
     if (!file) return;
 
+    setPhotoFile(file);
     setPhotoPreview(URL.createObjectURL(file));
-    setPhotoNote("Image captured. Clinician can review before completing SOAP note.");
+    setPhotoNote("Image captured. Click AI Analyze Image to review.");
+    setImageAnalysis("");
+  }
+
+  async function analyzeImage() {
+    if (!photoFile) {
+      setMessage("Please capture or upload an image first.");
+      return;
+    }
+
+    setAnalyzingImage(true);
+    setMessage("");
+
+    const formData = new FormData();
+    formData.append("image", photoFile);
+
+    try {
+      const res = await fetch("/api/analyze-clinical-image", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(data.error || "Image analysis failed.");
+        return;
+      }
+
+      setImageAnalysis(data.analysis);
+      setTranscript((prev) =>
+        `${prev}\n\nCLINICAL IMAGE ANALYSIS:\n${data.analysis}`.trim()
+      );
+      setPhotoNote("AI image analysis completed. Clinician must verify findings.");
+    } catch {
+      setMessage("Could not analyze image.");
+    } finally {
+      setAnalyzingImage(false);
+    }
   }
 
   async function generateSoap() {
@@ -272,6 +318,9 @@ Patient consented to AI-assisted clinical documentation.
 TRANSCRIPT / CLINICAL NOTES
 ${transcript || "No transcript captured."}
 
+IMAGE ANALYSIS
+${imageAnalysis || "No clinical image analysis captured."}
+
 SOAP NOTE
 
 Subjective:
@@ -280,7 +329,7 @@ Subjective:
 Objective:
 - Examination findings to be completed by clinician.
 - Vitals to be added if available.
-${photoNote ? "- Clinical image reviewed: " + photoNote : ""}
+${imageAnalysis ? "- Clinical image AI analysis reviewed. Clinician must verify findings." : ""}
 
 Assessment:
 - Clinical impression pending clinician confirmation.
@@ -330,7 +379,7 @@ REFERRAL / PRESCRIPTION
         <p style={styles.kicker}>Videomed Clinical Assistant</p>
         <h1 style={styles.title}>CareScriber Consultation</h1>
         <p style={styles.subtitle}>
-          Select patient, confirm consent, record, edit transcript, generate SOAP and export PDF.
+          Select patient, confirm consent, record, edit transcript, analyze images, generate SOAP and export PDF.
         </p>
 
         {isInAppBrowser && (
@@ -395,10 +444,7 @@ REFERRAL / PRESCRIPTION
         <h2 style={styles.heading}>Recording</h2>
 
         <button
-          style={{
-            ...styles.startButton,
-            opacity: recording ? 0.5 : 1,
-          }}
+          style={{ ...styles.startButton, opacity: recording ? 0.5 : 1 }}
           disabled={recording}
           onClick={startRecording}
         >
@@ -406,10 +452,7 @@ REFERRAL / PRESCRIPTION
         </button>
 
         <button
-          style={{
-            ...styles.stopButton,
-            opacity: !recording ? 0.5 : 1,
-          }}
+          style={{ ...styles.stopButton, opacity: !recording ? 0.5 : 1 }}
           disabled={!recording}
           onClick={stopRecording}
         >
@@ -432,10 +475,22 @@ REFERRAL / PRESCRIPTION
         </label>
 
         {photoPreview && (
-          <img src={photoPreview} alt="Clinical upload" style={styles.preview} />
+          <>
+            <img src={photoPreview} alt="Clinical upload" style={styles.preview} />
+
+            <button
+              onClick={analyzeImage}
+              disabled={analyzingImage}
+              style={styles.primaryButton}
+            >
+              {analyzingImage ? "Analyzing Image..." : "AI Analyze Image"}
+            </button>
+          </>
         )}
 
         {photoNote && <p style={styles.muted}>{photoNote}</p>}
+
+        {imageAnalysis && <pre style={styles.noteBox}>{imageAnalysis}</pre>}
 
         <hr style={styles.divider} />
 
