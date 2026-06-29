@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import medicineData from "../../medicine.json";
 
@@ -185,7 +184,6 @@ function escapeHtml(value: string) {
 }
 
 export default function EScriptPage() {
-  const searchParams = useSearchParams();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
 
@@ -224,13 +222,7 @@ export default function EScriptPage() {
     }
   }, []);
 
-  useEffect(() => {
-    const patientId = searchParams.get("patientId");
-    if (!patientId || patients.length === 0 || selectedPatient) return;
 
-    const match = patients.find((p) => p.id === patientId || p.patient_id === patientId || p.id_number === patientId);
-    if (match) selectPatient(match);
-  }, [searchParams, patients, selectedPatient]);
 
   async function loadPatients() {
     const { data, error } = await supabase.from("patients").select("*").order("created_at", { ascending: false });
