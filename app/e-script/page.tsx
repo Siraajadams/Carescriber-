@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
+import medicineData from "../../medicine.json";
 
 type Patient = {
   id: string;
@@ -83,6 +85,7 @@ const icd10List = [
 
 const forms = ["Cap", "Crm", "Oint", "Pess", "Pump", "Spray", "Supp", "Tab", "Unit(s)", "Vial", "Syrup", "Not Applicable"];
 const frequencies = ["OD", "BD", "TDS", "QID", "Before meals", "After meals", "Morning", "Lunch time", "Evening", "Use as directed", "Use as required"];
+const days = Array.from({ length: 29 }, (_, i) => String(i));
 const repeats = ["0", "1", "2", "3", "4", "5", "6"];
 
 function newItem(): ScriptItem {
@@ -122,11 +125,67 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function normaliseText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function medicineScore(m: Medicine, query: string) {
+  const q = normaliseText(query);
+  if (!q) return 0;
+
+  const brand = normaliseText(m.brand || "");
+  const active = normaliseText(m.active || "");
+  const combined = normaliseText([
+    m.brand,
+    m.active,
+    m.strength,
+    m.unit,
+    m.form,
+    m.nappi,
+    m.schedule,
+    m.manufacturer,
+  ].join(" "));
+
+  if (brand.startsWith(q)) return 100;
+  if (active.startsWith(q)) return 90;
+  if (brand.includes(q)) return 80;
+  if (active.includes(q)) return 70;
+  if (combined.includes(q)) return 60;
+
+  const tokens = q.split(" ").filter(Boolean);
+  const matchedTokens = tokens.filter((t) => combined.includes(t)).length;
+  if (matchedTokens > 0) return 40 + matchedTokens;
+
+  return 0;
+}
+
+function normaliseMedicine(raw: any): Medicine {
+  return {
+    nappi: String(raw.nappi || raw.NAPPI || raw["NAPPI Code"] || raw.code || ""),
+    schedule: String(raw.schedule || raw.Schedule || raw.scheduling || ""),
+    brand: String(raw.brand || raw.Brand || raw.product || raw.Product || raw["Product Name"] || raw.name || ""),
+    active: String(raw.active || raw.Active || raw.ingredient || raw["Active Ingredient"] || raw.generic || ""),
+    strength: String(raw.strength || raw.Strength || ""),
+    unit: String(raw.unit || raw.Unit || ""),
+    form: String(raw.form || raw.Form || raw.dosage_form || raw["Dosage Form"] || ""),
+    pack_size: String(raw.pack_size || raw.Pack_Size || raw["Pack Size"] || ""),
+    quantity: String(raw.quantity || raw.Quantity || ""),
+    sep: raw.sep ?? raw.SEP ?? raw.price ?? null,
+    unit_price: raw.unit_price ?? raw["Unit Price"] ?? null,
+    manufacturer: String(raw.manufacturer || raw.Manufacturer || ""),
+    registration: String(raw.registration || raw.Registration || ""),
+    atc: String(raw.atc || raw.ATC || ""),
+    generic_originator: String(raw.generic_originator || raw["Generic/Originator"] || ""),
+  };
+}
+
+
 function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 export default function EScriptPage() {
+  const searchParams = useSearchParams();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
 
@@ -143,6 +202,7 @@ export default function EScriptPage() {
   const [hpcsa, setHpcsa] = useState("");
   const [practiceNumber, setPracticeNumber] = useState("");
   const [practiceAddress, setPracticeAddress] = useState("");
+  const [editDoctor, setEditDoctor] = useState(false);
 
   const [items, setItems] = useState<ScriptItem[]>([newItem()]);
   const [message, setMessage] = useState("");
@@ -153,12 +213,24 @@ export default function EScriptPage() {
     loadPatients();
     loadDoctor();
     loadHistory();
-    fetch("/medicine-prices.json")
-      .then((res) => res.json())
-      .then((data) => setMedicines(data || []))
-      .catch(() => setMessage("Medicine price file not found. Add public/medicine-prices.json."))
-      .finally(() => setLoadingMeds(false));
+
+    try {
+      const raw = Array.isArray(medicineData) ? medicineData : [];
+      setMedicines(raw.map(normaliseMedicine).filter((m) => m.brand || m.active || m.nappi));
+    } catch {
+      setMessage("Medicine file could not be loaded. Confirm medicine.json exists in the project root.");
+    } finally {
+      setLoadingMeds(false);
+    }
   }, []);
+
+  useEffect(() => {
+    const patientId = searchParams.get("patientId");
+    if (!patientId || patients.length === 0 || selectedPatient) return;
+
+    const match = patients.find((p) => p.id === patientId || p.patient_id === patientId || p.id_number === patientId);
+    if (match) selectPatient(match);
+  }, [searchParams, patients, selectedPatient]);
 
   async function loadPatients() {
     const { data, error } = await supabase.from("patients").select("*").order("created_at", { ascending: false });
@@ -184,8 +256,10 @@ export default function EScriptPage() {
       setHpcsa(profile.hpcsa || profile.registration_number || "");
       setPracticeNumber(profile.practice_number || "");
       setPracticeAddress(profile.practice_address || "");
+      setEditDoctor(!(name && (profile.hpcsa || profile.registration_number) && profile.practice_number));
     } else {
       setDoctorEmail(user.email || "");
+      setEditDoctor(true);
     }
   }
 
@@ -212,11 +286,15 @@ export default function EScriptPage() {
   }
 
   function medicineResults(query: string) {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
+    const q = query.trim();
+    if (!q || q.length < 2) return [];
+
     return medicines
-      .filter((m) => [m.brand, m.active, m.nappi, m.schedule, m.form, m.strength].join(" ").toLowerCase().includes(q))
-      .slice(0, 20);
+      .map((m) => ({ medicine: m, score: medicineScore(m, q) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || (a.medicine.brand || "").localeCompare(b.medicine.brand || ""))
+      .slice(0, 20)
+      .map((r) => r.medicine);
   }
 
   function icdResults(item: ScriptItem) {
@@ -413,14 +491,31 @@ export default function EScriptPage() {
         {selectedPatient && <div style={styles.selected}>Selected: {patientName()} · ID: {selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}</div>}
 
         <h2 style={styles.heading}>Doctor</h2>
-        <div style={styles.grid2}>
-          <input style={styles.input} value={doctorName} onChange={(e) => setDoctorName(e.target.value)} placeholder="Doctor name" />
-          <input style={styles.input} value={hpcsa} onChange={(e) => setHpcsa(e.target.value)} placeholder="HPCSA / council no" />
-          <input style={styles.input} value={practiceNumber} onChange={(e) => setPracticeNumber(e.target.value)} placeholder="Practice number" />
-          <input style={styles.input} value={doctorMobile} onChange={(e) => setDoctorMobile(e.target.value)} placeholder="Doctor mobile" />
-          <input style={styles.input} value={doctorEmail} onChange={(e) => setDoctorEmail(e.target.value)} placeholder="Doctor email" />
+        <div style={styles.doctorSummary}>
+          <b>{doctorName || "Doctor profile not captured"}</b>
+          <span>HPCSA / Council: {hpcsa || "Missing"} · Practice: {practiceNumber || "Missing"}</span>
+          <span>{doctorEmail || "No email"} · {doctorMobile || "No mobile"}</span>
+          {practiceAddress && <span>{practiceAddress}</span>}
+          <button style={styles.smallEditButton} onClick={() => setEditDoctor((v) => !v)}>
+            {editDoctor ? "Hide Doctor Edit" : "Edit Doctor Details"}
+          </button>
         </div>
-        <textarea style={styles.textareaSmall} value={practiceAddress} onChange={(e) => setPracticeAddress(e.target.value)} placeholder="Practice address" />
+
+        {editDoctor && (
+          <>
+            <div style={styles.warning}>
+              These details should normally come from the logged-in doctor profile. Complete missing fields once in the profile so the doctor does not need to recapture them.
+            </div>
+            <div style={styles.grid2}>
+              <input style={styles.input} value={doctorName} onChange={(e) => setDoctorName(e.target.value)} placeholder="Doctor name" />
+              <input style={styles.input} value={hpcsa} onChange={(e) => setHpcsa(e.target.value)} placeholder="HPCSA / council no" />
+              <input style={styles.input} value={practiceNumber} onChange={(e) => setPracticeNumber(e.target.value)} placeholder="Practice number" />
+              <input style={styles.input} value={doctorMobile} onChange={(e) => setDoctorMobile(e.target.value)} placeholder="Doctor mobile" />
+              <input style={styles.input} value={doctorEmail} onChange={(e) => setDoctorEmail(e.target.value)} placeholder="Doctor email" />
+            </div>
+            <textarea style={styles.textareaSmall} value={practiceAddress} onChange={(e) => setPracticeAddress(e.target.value)} placeholder="Practice address" />
+          </>
+        )}
 
         <h2 style={styles.heading}>Proposed Rx</h2>
         {items.map((item, index) => (
@@ -436,12 +531,29 @@ export default function EScriptPage() {
             {item.medicine && <div style={styles.medSelected}>{item.medicine.brand} · {item.medicine.active} · {item.medicine.schedule} · SEP R{item.medicine.sep || "N/A"}</div>}
 
             <div style={styles.grid2}>
-              <input style={styles.input} value={item.dosage} onChange={(e) => updateItem(item.id, { dosage: e.target.value })} placeholder="Dosage e.g. 1" />
-              <select style={styles.input} value={item.form} onChange={(e) => updateItem(item.id, { form: e.target.value })}>{forms.map((f) => <option key={f}>{f}</option>)}</select>
-              <select style={styles.input} value={item.frequency} onChange={(e) => updateItem(item.id, { frequency: e.target.value })}>{frequencies.map((f) => <option key={f}>{f}</option>)}</select>
-              <input style={styles.input} value={item.duration} onChange={(e) => updateItem(item.id, { duration: e.target.value })} placeholder="Duration days" />
-              <select style={styles.input} value={item.repeats} onChange={(e) => updateItem(item.id, { repeats: e.target.value })}>{repeats.map((r) => <option key={r}>{r}</option>)}</select>
-              <select style={styles.input} value={item.substitution} onChange={(e) => updateItem(item.id, { substitution: e.target.value })}><option>Substitution allowed</option><option>Do not substitute</option></select>
+              <label style={styles.fieldLabel}>Dose / Quantity
+                <input style={styles.input} value={item.dosage} onChange={(e) => updateItem(item.id, { dosage: e.target.value })} placeholder="e.g. 1" />
+              </label>
+
+              <label style={styles.fieldLabel}>Form
+                <select style={styles.input} value={item.form} onChange={(e) => updateItem(item.id, { form: e.target.value })}>{forms.map((f) => <option key={f}>{f}</option>)}</select>
+              </label>
+
+              <label style={styles.fieldLabel}>Frequency
+                <select style={styles.input} value={item.frequency} onChange={(e) => updateItem(item.id, { frequency: e.target.value })}>{frequencies.map((f) => <option key={f}>{f}</option>)}</select>
+              </label>
+
+              <label style={styles.fieldLabel}>Days
+                <select style={styles.input} value={item.duration} onChange={(e) => updateItem(item.id, { duration: e.target.value })}>{days.map((d) => <option key={d}>{d}</option>)}</select>
+              </label>
+
+              <label style={styles.fieldLabel}>Repeats
+                <select style={styles.input} value={item.repeats} onChange={(e) => updateItem(item.id, { repeats: e.target.value })}>{repeats.map((r) => <option key={r}>{r}</option>)}</select>
+              </label>
+
+              <label style={styles.fieldLabel}>Substitution
+                <select style={styles.input} value={item.substitution} onChange={(e) => updateItem(item.id, { substitution: e.target.value })}><option>Substitution allowed</option><option>Do not substitute</option></select>
+              </label>
             </div>
             <textarea style={styles.textareaSmall} value={item.notes} onChange={(e) => updateItem(item.id, { notes: e.target.value })} placeholder="Notes / counselling instructions" />
           </div>
@@ -476,12 +588,16 @@ const styles: Record<string, CSSProperties> = {
   title: { fontSize: 56, lineHeight: 1, margin: "12px 0", fontWeight: 900 },
   subtitle: { fontSize: 22, color: "#526174", lineHeight: 1.45 },
   notice: { marginTop: 18, background: "#dbeafe", color: "#1e40af", padding: 14, borderRadius: 14, fontWeight: 900 },
+  warning: { marginTop: 12, background: "#fff7ed", color: "#9a3412", padding: 14, borderRadius: 14, fontWeight: 800 },
   heading: { fontSize: 34, fontWeight: 900, marginTop: 34, marginBottom: 16 },
   label: { display: "block", fontWeight: 900, marginTop: 14, marginBottom: 6 },
+  fieldLabel: { display: "block", fontWeight: 900, marginTop: 10 },
   input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10, background: "#fff" },
   textareaSmall: { width: "100%", boxSizing: "border-box", minHeight: 88, border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10 },
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginTop: 10, display: "grid", gap: 6, fontSize: 17 },
   selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
+  doctorSummary: { display: "grid", gap: 6, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 16 },
+  smallEditButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#e2e8f0", color: "#0f172a", fontWeight: 900 },
   muted: { color: "#64748b", fontSize: 17 },
   grid2: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 },
   rxCard: { border: "1px solid #cbd5e1", borderRadius: 20, padding: 18, marginBottom: 18, background: "#fbfdff" },
