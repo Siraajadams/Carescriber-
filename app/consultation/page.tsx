@@ -372,6 +372,7 @@ REFERRAL / PRESCRIPTION
           <Link href="/patients" style={styles.tab}>Patients</Link>
           <Link href="/consultation" style={styles.activeTab}>Consultation</Link>
           <Link href="/sick-note" style={styles.sickTab}>Sick Note</Link>
+          <Link href="/e-script" style={styles.escriptTab}>eScript</Link>
         </div>
 
         {isInAppBrowser && (
@@ -419,9 +420,21 @@ REFERRAL / PRESCRIPTION
         )}
 
         {selectedPatient && (
-          <Link href="/sick-note" style={styles.sickNoteButton}>
-            Create Sick Note for Selected Patient
-          </Link>
+          <div style={styles.actionGrid}>
+            <Link
+              href={`/sick-note?patientId=${selectedPatient.id}`}
+              style={styles.sickNoteButton}
+            >
+              Create Sick Note for Selected Patient
+            </Link>
+
+            <Link
+              href={`/e-script?patientId=${selectedPatient.id}`}
+              style={styles.escriptButton}
+            >
+              Create eScript for Selected Patient
+            </Link>
+          </div>
         )}
 
         <hr style={styles.divider} />
@@ -531,6 +544,7 @@ const styles: Record<string, CSSProperties> = {
   tab: { padding: "12px 14px", borderRadius: 14, background: "#e2e8f0", color: "#0f172a", textDecoration: "none", fontWeight: 900 },
   activeTab: { padding: "12px 14px", borderRadius: 14, background: "#2563eb", color: "#fff", textDecoration: "none", fontWeight: 900 },
   sickTab: { padding: "12px 14px", borderRadius: 14, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900 },
+  escriptTab: { padding: "12px 14px", borderRadius: 14, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900 },
   warning: { background: "#fff7ed", color: "#9a3412", padding: 16, borderRadius: 16, fontWeight: 800, marginTop: 18 },
   divider: { border: 0, borderTop: "1px solid #e2e8f0", margin: "32px 0" },
   heading: { fontSize: 34, fontWeight: 900, marginBottom: 18 },
@@ -538,7 +552,9 @@ const styles: Record<string, CSSProperties> = {
   muted: { color: "#64748b", fontSize: 18 },
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, marginTop: 12, display: "grid", gap: 6, fontSize: 18 },
   selected: { marginTop: 16, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
-  sickNoteButton: { display: "block", textAlign: "center", marginTop: 14, padding: 18, borderRadius: 18, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
+  actionGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 },
+  sickNoteButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
+  escriptButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
   checkRow: { display: "flex", gap: 14, alignItems: "flex-start", fontSize: 20, lineHeight: 1.4 },
   startButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#16a34a", color: "#fff", fontSize: 22, fontWeight: 900, marginBottom: 14 },
   stopButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#dc2626", color: "#fff", fontSize: 22, fontWeight: 900 },
