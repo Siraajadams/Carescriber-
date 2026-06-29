@@ -67,10 +67,7 @@ export default function ConsultationPage() {
   }, []);
 
   async function loadPatients() {
-    const { data, error } = await supabase
-      .from("patients")
-      .select("*")
-      .order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("patients").select("*");
 
     if (error) {
       setMessage("Patient load error: " + error.message);
@@ -107,22 +104,14 @@ export default function ConsultationPage() {
 
   const filteredPatients = useMemo(() => {
     const q = search.trim().toLowerCase();
-
     if (!q || selectedPatient) return [];
 
-    return patients.filter((p) => {
-      const text = [
-        p.first_name,
-        p.surname,
-        p.id_number,
-        p.patient_id,
-        p.mobile,
-      ]
+    return patients.filter((p) =>
+      [p.first_name, p.surname, p.id_number, p.patient_id, p.mobile]
         .join(" ")
-        .toLowerCase();
-
-      return text.includes(q);
-    });
+        .toLowerCase()
+        .includes(q)
+    );
   }, [patients, search, selectedPatient]);
 
   function selectPatient(p: Patient) {
@@ -150,9 +139,7 @@ export default function ConsultationPage() {
     setMessage("");
 
     if (isInAppBrowser) {
-      setMessage(
-        "Please open CareScriber in Safari or Chrome. WhatsApp browser often blocks microphone access."
-      );
+      setMessage("Open in Safari or Chrome. WhatsApp browser may block microphone access.");
     }
 
     const SpeechRecognition =
@@ -215,7 +202,7 @@ export default function ConsultationPage() {
 
         recognition.onend = () => {
           if (keepRecordingRef.current) {
-            setTimeout(startSession, 800);
+            setTimeout(startSession, 700);
           } else {
             setRecording(false);
           }
@@ -233,17 +220,14 @@ export default function ConsultationPage() {
 
   function stopRecording() {
     keepRecordingRef.current = false;
-
     try {
       recognitionRef.current?.stop();
     } catch {}
-
     setRecording(false);
   }
 
   function handlePhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-
     if (!file) return;
 
     setPhotoFile(file);
@@ -283,7 +267,7 @@ export default function ConsultationPage() {
       );
       setPhotoNote("AI image analysis completed. Clinician must verify findings.");
     } catch {
-      setMessage("Could not analyze image.");
+      setMessage("Could not analyze image. Check API route.");
     } finally {
       setAnalyzingImage(false);
     }
@@ -339,6 +323,7 @@ Plan:
 - Treatment plan to be confirmed by clinician.
 - Consider ICD-10 coding.
 - Consider prescription if clinically appropriate.
+- Consider sick note if clinically appropriate.
 - Provide patient education.
 - Arrange follow-up if required.
 
@@ -381,6 +366,13 @@ REFERRAL / PRESCRIPTION
         <p style={styles.subtitle}>
           Select patient, confirm consent, record, edit transcript, analyze images, generate SOAP and export PDF.
         </p>
+
+        <div style={styles.tabRow}>
+          <Link href="/dashboard" style={styles.tab}>Dashboard</Link>
+          <Link href="/patients" style={styles.tab}>Patients</Link>
+          <Link href="/consultation" style={styles.activeTab}>Consultation</Link>
+          <Link href="/sick-note" style={styles.sickTab}>Sick Note</Link>
+        </div>
 
         {isInAppBrowser && (
           <div style={styles.warning}>
@@ -426,16 +418,18 @@ REFERRAL / PRESCRIPTION
           </div>
         )}
 
+        {selectedPatient && (
+          <Link href="/sick-note" style={styles.sickNoteButton}>
+            Create Sick Note for Selected Patient
+          </Link>
+        )}
+
         <hr style={styles.divider} />
 
         <h2 style={styles.heading}>AI Consent</h2>
 
         <label style={styles.checkRow}>
-          <input
-            type="checkbox"
-            checked={consent}
-            onChange={(e) => setConsent(e.target.checked)}
-          />
+          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
           <span>I have the patient’s consent to use CareScriber AI.</span>
         </label>
 
@@ -443,19 +437,11 @@ REFERRAL / PRESCRIPTION
 
         <h2 style={styles.heading}>Recording</h2>
 
-        <button
-          style={{ ...styles.startButton, opacity: recording ? 0.5 : 1 }}
-          disabled={recording}
-          onClick={startRecording}
-        >
+        <button style={{ ...styles.startButton, opacity: recording ? 0.5 : 1 }} disabled={recording} onClick={startRecording}>
           🎙 Start Recording
         </button>
 
-        <button
-          style={{ ...styles.stopButton, opacity: !recording ? 0.5 : 1 }}
-          disabled={!recording}
-          onClick={stopRecording}
-        >
+        <button style={{ ...styles.stopButton, opacity: !recording ? 0.5 : 1 }} disabled={!recording} onClick={stopRecording}>
           ⏹ Stop Recording
         </button>
 
@@ -465,31 +451,19 @@ REFERRAL / PRESCRIPTION
 
         <label style={styles.cameraButton}>
           📷 Capture or Upload Image
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={handlePhoto}
-            style={{ display: "none" }}
-          />
+          <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} style={{ display: "none" }} />
         </label>
 
         {photoPreview && (
           <>
             <img src={photoPreview} alt="Clinical upload" style={styles.preview} />
-
-            <button
-              onClick={analyzeImage}
-              disabled={analyzingImage}
-              style={styles.primaryButton}
-            >
+            <button onClick={analyzeImage} disabled={analyzingImage} style={styles.primaryButton}>
               {analyzingImage ? "Analyzing Image..." : "AI Analyze Image"}
             </button>
           </>
         )}
 
         {photoNote && <p style={styles.muted}>{photoNote}</p>}
-
         {imageAnalysis && <pre style={styles.noteBox}>{imageAnalysis}</pre>}
 
         <hr style={styles.divider} />
@@ -514,7 +488,6 @@ REFERRAL / PRESCRIPTION
             <button style={styles.pdfButton} onClick={exportPdf}>
               Export / Print PDF
             </button>
-
             <pre style={styles.noteBox}>{soapNote}</pre>
           </>
         )}
@@ -548,216 +521,35 @@ REFERRAL / PRESCRIPTION
 }
 
 const styles: Record<string, CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background: "#eef4fb",
-    padding: "18px",
-    fontFamily: "Arial, Helvetica, sans-serif",
-    color: "#0f172a",
-  },
-  card: {
-    maxWidth: 760,
-    margin: "0 auto",
-    background: "#ffffff",
-    borderRadius: 28,
-    padding: 28,
-    boxShadow: "0 20px 60px rgba(15, 23, 42, 0.10)",
-  },
-  back: {
-    color: "#2563eb",
-    fontWeight: 800,
-    textDecoration: "none",
-    fontSize: 18,
-  },
-  kicker: {
-    marginTop: 30,
-    color: "#2563eb",
-    fontWeight: 900,
-    fontSize: 18,
-  },
-  title: {
-    fontSize: 48,
-    lineHeight: 1,
-    margin: "12px 0",
-    fontWeight: 900,
-  },
-  subtitle: {
-    fontSize: 22,
-    color: "#526174",
-    lineHeight: 1.45,
-  },
-  warning: {
-    background: "#fff7ed",
-    color: "#9a3412",
-    padding: 16,
-    borderRadius: 16,
-    fontWeight: 800,
-    marginTop: 18,
-  },
-  divider: {
-    border: 0,
-    borderTop: "1px solid #e2e8f0",
-    margin: "32px 0",
-  },
-  heading: {
-    fontSize: 34,
-    fontWeight: 900,
-    marginBottom: 18,
-  },
-  input: {
-    width: "100%",
-    boxSizing: "border-box",
-    border: "2px solid #cbd5e1",
-    borderRadius: 20,
-    padding: 18,
-    fontSize: 20,
-  },
-  muted: {
-    color: "#64748b",
-    fontSize: 18,
-  },
-  patientCard: {
-    width: "100%",
-    textAlign: "left",
-    background: "#f8fafc",
-    border: "1px solid #cbd5e1",
-    borderRadius: 18,
-    padding: 18,
-    marginTop: 12,
-    display: "grid",
-    gap: 6,
-    fontSize: 18,
-  },
-  selected: {
-    marginTop: 16,
-    background: "#dcfce7",
-    color: "#166534",
-    padding: 16,
-    borderRadius: 16,
-    fontWeight: 900,
-    fontSize: 17,
-  },
-  checkRow: {
-    display: "flex",
-    gap: 14,
-    alignItems: "flex-start",
-    fontSize: 20,
-    lineHeight: 1.4,
-  },
-  startButton: {
-    width: "100%",
-    border: 0,
-    borderRadius: 22,
-    padding: 22,
-    background: "#16a34a",
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: 900,
-    marginBottom: 14,
-  },
-  stopButton: {
-    width: "100%",
-    border: 0,
-    borderRadius: 22,
-    padding: 22,
-    background: "#dc2626",
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: 900,
-  },
-  cameraButton: {
-    display: "block",
-    width: "100%",
-    boxSizing: "border-box",
-    textAlign: "center",
-    borderRadius: 20,
-    padding: 20,
-    background: "#dbeafe",
-    color: "#1d4ed8",
-    fontWeight: 900,
-    fontSize: 20,
-  },
-  preview: {
-    width: "100%",
-    borderRadius: 18,
-    marginTop: 16,
-    border: "1px solid #cbd5e1",
-  },
-  textarea: {
-    width: "100%",
-    boxSizing: "border-box",
-    minHeight: 210,
-    border: "2px solid #cbd5e1",
-    borderRadius: 22,
-    padding: 20,
-    fontSize: 20,
-    lineHeight: 1.5,
-  },
-  primaryButton: {
-    width: "100%",
-    border: 0,
-    borderRadius: 20,
-    padding: 22,
-    background: "#2563eb",
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: 900,
-    marginTop: 16,
-  },
-  lightButton: {
-    width: "100%",
-    border: 0,
-    borderRadius: 20,
-    padding: 20,
-    background: "#dbeafe",
-    color: "#1d4ed8",
-    fontSize: 20,
-    fontWeight: 900,
-    marginTop: 16,
-  },
-  pdfButton: {
-    width: "100%",
-    border: 0,
-    borderRadius: 20,
-    padding: 20,
-    background: "#0f172a",
-    color: "#fff",
-    fontSize: 20,
-    fontWeight: 900,
-    marginTop: 18,
-  },
-  message: {
-    background: "#e0f2fe",
-    color: "#075985",
-    padding: 14,
-    borderRadius: 14,
-    fontWeight: 800,
-    marginTop: 16,
-  },
-  noteBox: {
-    whiteSpace: "pre-wrap",
-    background: "#f8fafc",
-    border: "1px solid #cbd5e1",
-    borderRadius: 18,
-    padding: 18,
-    fontSize: 15,
-    marginTop: 18,
-    overflowX: "auto",
-  },
-  recentCard: {
-    border: "1px solid #cbd5e1",
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 12,
-    display: "grid",
-    gap: 8,
-  },
-  smallButton: {
-    border: 0,
-    borderRadius: 14,
-    padding: 12,
-    background: "#2563eb",
-    color: "#fff",
-    fontWeight: 900,
-  },
+  page: { minHeight: "100vh", background: "#eef4fb", padding: "18px", fontFamily: "Arial, Helvetica, sans-serif", color: "#0f172a" },
+  card: { maxWidth: 760, margin: "0 auto", background: "#ffffff", borderRadius: 28, padding: 28, boxShadow: "0 20px 60px rgba(15, 23, 42, 0.10)" },
+  back: { color: "#2563eb", fontWeight: 800, textDecoration: "none", fontSize: 18 },
+  kicker: { marginTop: 30, color: "#2563eb", fontWeight: 900, fontSize: 18 },
+  title: { fontSize: 48, lineHeight: 1, margin: "12px 0", fontWeight: 900 },
+  subtitle: { fontSize: 22, color: "#526174", lineHeight: 1.45 },
+  tabRow: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 },
+  tab: { padding: "12px 14px", borderRadius: 14, background: "#e2e8f0", color: "#0f172a", textDecoration: "none", fontWeight: 900 },
+  activeTab: { padding: "12px 14px", borderRadius: 14, background: "#2563eb", color: "#fff", textDecoration: "none", fontWeight: 900 },
+  sickTab: { padding: "12px 14px", borderRadius: 14, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900 },
+  warning: { background: "#fff7ed", color: "#9a3412", padding: 16, borderRadius: 16, fontWeight: 800, marginTop: 18 },
+  divider: { border: 0, borderTop: "1px solid #e2e8f0", margin: "32px 0" },
+  heading: { fontSize: 34, fontWeight: 900, marginBottom: 18 },
+  input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 20, padding: 18, fontSize: 20 },
+  muted: { color: "#64748b", fontSize: 18 },
+  patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, marginTop: 12, display: "grid", gap: 6, fontSize: 18 },
+  selected: { marginTop: 16, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
+  sickNoteButton: { display: "block", textAlign: "center", marginTop: 14, padding: 18, borderRadius: 18, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
+  checkRow: { display: "flex", gap: 14, alignItems: "flex-start", fontSize: 20, lineHeight: 1.4 },
+  startButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#16a34a", color: "#fff", fontSize: 22, fontWeight: 900, marginBottom: 14 },
+  stopButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#dc2626", color: "#fff", fontSize: 22, fontWeight: 900 },
+  cameraButton: { display: "block", width: "100%", boxSizing: "border-box", textAlign: "center", borderRadius: 20, padding: 20, background: "#dbeafe", color: "#1d4ed8", fontWeight: 900, fontSize: 20 },
+  preview: { width: "100%", borderRadius: 18, marginTop: 16, border: "1px solid #cbd5e1" },
+  textarea: { width: "100%", boxSizing: "border-box", minHeight: 210, border: "2px solid #cbd5e1", borderRadius: 22, padding: 20, fontSize: 20, lineHeight: 1.5 },
+  primaryButton: { width: "100%", border: 0, borderRadius: 20, padding: 22, background: "#2563eb", color: "#fff", fontSize: 22, fontWeight: 900, marginTop: 16 },
+  lightButton: { width: "100%", border: 0, borderRadius: 20, padding: 20, background: "#dbeafe", color: "#1d4ed8", fontSize: 20, fontWeight: 900, marginTop: 16 },
+  pdfButton: { width: "100%", border: 0, borderRadius: 20, padding: 20, background: "#0f172a", color: "#fff", fontSize: 20, fontWeight: 900, marginTop: 18 },
+  message: { background: "#e0f2fe", color: "#075985", padding: 14, borderRadius: 14, fontWeight: 800, marginTop: 16 },
+  noteBox: { whiteSpace: "pre-wrap", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, fontSize: 15, marginTop: 18, overflowX: "auto" },
+  recentCard: { border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginBottom: 12, display: "grid", gap: 8 },
+  smallButton: { border: 0, borderRadius: 14, padding: 12, background: "#2563eb", color: "#fff", fontWeight: 900 },
 };
