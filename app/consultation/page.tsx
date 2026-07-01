@@ -8,12 +8,17 @@ type Patient = {
   id: string;
   first_name: string;
   surname: string;
+  last_name?: string;
   id_number?: string;
   patient_id?: string;
+  national_id?: string;
   age?: number | null;
   date_of_birth?: string | null;
+  dob?: string | null;
   gender?: string;
   mobile?: string;
+  phone?: string;
+  email?: string;
   medical_aid?: string;
   allergies?: string;
   current_medicines?: string;
@@ -27,11 +32,88 @@ type Consultation = {
   soap_note?: string;
 };
 
+type SymptomReferral = {
+  id: string;
+  patient_id?: string;
+  referral_code?: string;
+  consent_token?: string;
+  consent_given?: boolean;
+  status?: string;
+  expires_at?: string | null;
+  submitted_at?: string | null;
+  viewed_at?: string | null;
+  triage_summary?: string | null;
+  urgency_level?: string | null;
+  recommendation?: string | null;
+  patient_snapshot?: any;
+  triage_snapshot?: any;
+};
+
 declare global {
   interface Window {
     webkitSpeechRecognition?: any;
     SpeechRecognition?: any;
   }
+}
+
+function normaliseId(value: string) {
+  return value.trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function patientSurname(patient: Patient) {
+  return patient.surname || patient.last_name || "";
+}
+
+function patientIdValue(patient: Patient) {
+  return patient.patient_id || patient.id_number || patient.national_id || "";
+}
+
+function patientDob(patient: Patient) {
+  return patient.date_of_birth || patient.dob || "";
+}
+
+function patientMobile(patient: Patient) {
+  return patient.mobile || patient.phone || "";
+}
+
+function calculateAge(dob?: string | null, fallback?: number | null) {
+  if (fallback) return String(fallback);
+  if (!dob) return "Not captured";
+
+  const birth = new Date(dob);
+  if (Number.isNaN(birth.getTime())) return "Not captured";
+
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDiff = today.getMonth() - birth.getMonth();
+
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+    age--;
+  }
+
+  return String(age);
+}
+
+function mapPatient(p: any): Patient {
+  return {
+    id: p.id,
+    first_name: p.first_name || p.name || "",
+    surname: p.surname || p.last_name || "",
+    last_name: p.last_name || p.surname || "",
+    id_number: p.id_number || p.patient_id || p.national_id || "",
+    patient_id: p.patient_id || p.id_number || p.national_id || "",
+    national_id: p.national_id || p.patient_id || p.id_number || "",
+    age: p.age || null,
+    date_of_birth: p.date_of_birth || p.dob || null,
+    dob: p.dob || p.date_of_birth || null,
+    gender: p.gender || "",
+    mobile: p.mobile || p.phone || p.mobile_number || "",
+    phone: p.phone || p.mobile || p.mobile_number || "",
+    email: p.email || "",
+    medical_aid: p.medical_aid || "",
+    allergies: p.allergies || "No known allergies",
+    current_medicines: p.current_medicines || "",
+  };
 }
 
 export default function ConsultationPage() {
@@ -45,6 +127,12 @@ export default function ConsultationPage() {
   const [search, setSearch] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [consent, setConsent] = useState(false);
+
+  const [referralCode, setReferralCode] = useState("");
+  const [consentToken, setConsentToken] = useState("");
+  const [referralLoading, setReferralLoading] = useState(false);
+  const [referral, setReferral] = useState<SymptomReferral | null>(null);
+  const [referralNote, setReferralNote] = useState("");
 
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -64,32 +152,46 @@ export default function ConsultationPage() {
   useEffect(() => {
     loadPatients();
     loadRecent();
+    loadPatientFromUrl();
   }, []);
 
-  async function loadPatients() {
-    const { data, error } = await supabase.from("patients").select("*");
+  async function loadPatientFromUrl() {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const patientId = params.get("patient") || params.get("patientId");
+
+    if (!patientId) return;
+
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .eq("id", patientId)
+      .limit(1);
 
     if (error) {
       setMessage("Patient load error: " + error.message);
       return;
     }
 
-    const mapped = (data || []).map((p: any) => ({
-      id: p.id,
-      first_name: p.first_name || p.name || "",
-      surname: p.surname || p.last_name || "",
-      id_number: p.id_number || p.patient_id || "",
-      patient_id: p.patient_id || p.id_number || "",
-      age: p.age || null,
-      date_of_birth: p.date_of_birth || p.dob || null,
-      gender: p.gender || "",
-      mobile: p.mobile || p.mobile_number || "",
-      medical_aid: p.medical_aid || "",
-      allergies: p.allergies || "No known allergies",
-      current_medicines: p.current_medicines || "",
-    }));
+    if (data && data.length > 0) {
+      selectPatient(mapPatient(data[0]));
+    }
+  }
 
-    setPatients(mapped);
+  async function loadPatients() {
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (error) {
+      setMessage("Patient load error: " + error.message);
+      return;
+    }
+
+    setPatients((data || []).map(mapPatient));
   }
 
   async function loadRecent() {
@@ -107,7 +209,7 @@ export default function ConsultationPage() {
     if (!q || selectedPatient) return [];
 
     return patients.filter((p) =>
-      [p.first_name, p.surname, p.id_number, p.patient_id, p.mobile]
+      [p.first_name, patientSurname(p), p.id_number, p.patient_id, p.national_id, p.mobile, p.phone]
         .join(" ")
         .toLowerCase()
         .includes(q)
@@ -116,8 +218,150 @@ export default function ConsultationPage() {
 
   function selectPatient(p: Patient) {
     setSelectedPatient(p);
-    setSearch(`${p.first_name} ${p.surname}`.trim());
+    setSearch(`${p.first_name} ${patientSurname(p)}`.trim());
     setMessage("");
+  }
+
+  async function searchCareScriberPatients() {
+    const term = search.trim();
+
+    if (!term) {
+      setMessage("Enter name, surname, National ID / Passport or mobile.");
+      return;
+    }
+
+    const clean = normaliseId(term);
+
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .or(
+        [
+          `first_name.ilike.%${term}%`,
+          `surname.ilike.%${term}%`,
+          `last_name.ilike.%${term}%`,
+          `patient_id.ilike.%${term}%`,
+          `id_number.ilike.%${term}%`,
+          `national_id.ilike.%${term}%`,
+          `mobile.ilike.%${term}%`,
+          `phone.ilike.%${term}%`,
+          `patient_id.ilike.%${clean}%`,
+          `id_number.ilike.%${clean}%`,
+          `national_id.ilike.%${clean}%`,
+        ].join(",")
+      )
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (error) {
+      setMessage("Patient search failed: " + error.message);
+      return;
+    }
+
+    const mapped = (data || []).map(mapPatient);
+    setPatients(mapped);
+
+    if (mapped.length === 0) {
+      setMessage("No matching patient found. Register the patient first.");
+    } else if (mapped.length === 1) {
+      selectPatient(mapped[0]);
+    } else {
+      setSelectedPatient(null);
+      setMessage(`${mapped.length} possible patients found. Select the correct patient.`);
+    }
+  }
+
+  async function unlockSymptomAIReferral() {
+    setMessage("");
+    setReferralNote("");
+    setReferralLoading(true);
+
+    const code = referralCode.trim().toUpperCase();
+    const token = consentToken.trim();
+
+    if (!code || !token) {
+      setReferralLoading(false);
+      setReferralNote("Enter both the referral code and patient consent token.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("symptomai_referrals")
+      .select("*")
+      .eq("referral_code", code)
+      .eq("consent_token", token)
+      .limit(1);
+
+    if (error) {
+      setReferralLoading(false);
+      setReferralNote("Referral lookup failed: " + error.message);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setReferralLoading(false);
+      setReferralNote("No referral found for that code and consent token.");
+      return;
+    }
+
+    const foundReferral = data[0] as SymptomReferral;
+
+    if (foundReferral.expires_at && new Date(foundReferral.expires_at) < new Date()) {
+      setReferralLoading(false);
+      setReferralNote("This referral has expired. Ask the patient to generate a new referral.");
+      return;
+    }
+
+    if (!foundReferral.consent_given) {
+      setReferralLoading(false);
+      setReferralNote("The patient has not granted consent to share this referral.");
+      return;
+    }
+
+    setReferral(foundReferral);
+
+    if (foundReferral.patient_id) {
+      const { data: patientData, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", foundReferral.patient_id)
+        .limit(1);
+
+      if (patientError) {
+        setReferralLoading(false);
+        setReferralNote("Referral found, but patient load failed: " + patientError.message);
+        return;
+      }
+
+      if (patientData && patientData.length > 0) {
+        selectPatient(mapPatient(patientData[0]));
+      }
+    }
+
+    const triageText = [
+      foundReferral.triage_summary ? `SYMPTOMAI TRIAGE SUMMARY:\n${foundReferral.triage_summary}` : "",
+      foundReferral.urgency_level ? `Urgency: ${foundReferral.urgency_level}` : "",
+      foundReferral.recommendation ? `Recommendation: ${foundReferral.recommendation}` : "",
+      foundReferral.triage_snapshot ? `Triage details:\n${JSON.stringify(foundReferral.triage_snapshot, null, 2)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    if (triageText) {
+      setTranscript((prev) => `${triageText}\n\n${prev}`.trim());
+    }
+
+    await supabase
+      .from("symptomai_referrals")
+      .update({
+        viewed_at: new Date().toISOString(),
+        status: "Viewed",
+      })
+      .eq("id", foundReferral.id);
+
+    setReferralLoading(false);
+    setConsent(true);
+    setReferralNote("Referral unlocked. Patient profile and SymptomAI triage are loaded.");
   }
 
   function newConsultation() {
@@ -125,6 +369,10 @@ export default function ConsultationPage() {
     setSelectedPatient(null);
     setSearch("");
     setConsent(false);
+    setReferralCode("");
+    setConsentToken("");
+    setReferral(null);
+    setReferralNote("");
     setTranscript("");
     setSoapNote("");
     setPhotoPreview(null);
@@ -284,17 +532,31 @@ export default function ConsultationPage() {
       return;
     }
 
+    const referralText = referral
+      ? `
+SYMPTOMAI REFERRAL
+Referral code: ${referral.referral_code || "Not captured"}
+Submitted: ${referral.submitted_at || "Not captured"}
+Urgency: ${referral.urgency_level || "Not captured"}
+Recommendation: ${referral.recommendation || "Not captured"}
+Summary: ${referral.triage_summary || "Not captured"}
+`
+      : "";
+
     const generated = `
 PATIENT SUMMARY
-Name: ${selectedPatient.first_name} ${selectedPatient.surname}
-ID Number: ${selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}
-Age: ${selectedPatient.age || "Not captured"}
-DOB: ${selectedPatient.date_of_birth || "Not captured"}
+Name: ${selectedPatient.first_name} ${patientSurname(selectedPatient)}
+ID Number: ${patientIdValue(selectedPatient) || "Not captured"}
+Age: ${calculateAge(patientDob(selectedPatient), selectedPatient.age)}
+DOB: ${patientDob(selectedPatient) || "Not captured"}
 Gender: ${selectedPatient.gender || "Not captured"}
-Mobile: ${selectedPatient.mobile || "Not captured"}
+Mobile: ${patientMobile(selectedPatient) || "Not captured"}
+Email: ${selectedPatient.email || "Not captured"}
 Medical Aid: ${selectedPatient.medical_aid || "Not captured"}
 Allergies: ${selectedPatient.allergies || "No known allergies"}
 Current Medicines: ${selectedPatient.current_medicines || "Not captured"}
+
+${referralText}
 
 CONSENT
 Patient consented to AI-assisted clinical documentation.
@@ -338,14 +600,28 @@ REFERRAL / PRESCRIPTION
 
     const { error } = await supabase.from("consultations").insert({
       patient_id: selectedPatient.id,
-      patient_summary: `${selectedPatient.first_name} ${selectedPatient.surname}`,
+      patient_summary: `${selectedPatient.first_name} ${patientSurname(selectedPatient)}`,
       transcript,
       soap_note: generated,
       consent_confirmed: consent,
+      referral_id: referral?.id || null,
     });
 
     if (error) {
-      setMessage("SOAP generated, but save failed: " + error.message);
+      const { error: fallbackError } = await supabase.from("consultations").insert({
+        patient_id: selectedPatient.id,
+        patient_summary: `${selectedPatient.first_name} ${patientSurname(selectedPatient)}`,
+        transcript,
+        soap_note: generated,
+        consent_confirmed: consent,
+      });
+
+      if (fallbackError) {
+        setMessage("SOAP generated, but save failed: " + fallbackError.message);
+      } else {
+        setMessage("SOAP note generated and saved.");
+        loadRecent();
+      }
     } else {
       setMessage("SOAP note generated and saved.");
       loadRecent();
@@ -364,7 +640,7 @@ REFERRAL / PRESCRIPTION
         <p style={styles.kicker}>Videomed Clinical Assistant</p>
         <h1 style={styles.title}>CareScriber Consultation</h1>
         <p style={styles.subtitle}>
-          Select patient, confirm consent, record, edit transcript, analyze images, generate SOAP and export PDF.
+          Search patient, unlock SymptomAI referrals, confirm consent, record, edit transcript, analyze images, generate SOAP and export PDF.
         </p>
 
         <div style={styles.tabRow}>
@@ -387,17 +663,63 @@ REFERRAL / PRESCRIPTION
 
         <hr style={styles.divider} />
 
+        <h2 style={styles.heading}>Unlock SymptomAI Referral</h2>
+        <p style={styles.muted}>
+          Enter the patient referral code and consent token generated on SymptomAI.
+        </p>
+
+        <div style={styles.twoCol}>
+          <input
+            style={styles.input}
+            value={referralCode}
+            placeholder="Referral code e.g. CS-ABC123"
+            onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+          />
+
+          <input
+            style={styles.input}
+            value={consentToken}
+            placeholder="Patient consent token"
+            onChange={(e) => setConsentToken(e.target.value)}
+          />
+        </div>
+
+        <button
+          style={styles.primaryButton}
+          onClick={unlockSymptomAIReferral}
+          disabled={referralLoading}
+        >
+          {referralLoading ? "Unlocking Referral..." : "Unlock Referral"}
+        </button>
+
+        {referralNote && <div style={styles.message}>{referralNote}</div>}
+
+        {referral && (
+          <div style={styles.selected}>
+            SymptomAI referral unlocked: {referral.referral_code} · Status:{" "}
+            {referral.status || "Pending"}
+          </div>
+        )}
+
+        <hr style={styles.divider} />
+
         <h2 style={styles.heading}>Find Patient</h2>
 
-        <input
-          style={styles.input}
-          value={search}
-          placeholder="Search surname, first name, ID or mobile"
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setSelectedPatient(null);
-          }}
-        />
+        <div style={styles.searchRow}>
+          <input
+            style={styles.input}
+            value={search}
+            placeholder="Search surname, first name, National ID / Passport or mobile"
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setSelectedPatient(null);
+            }}
+          />
+
+          <button style={styles.smallButton} onClick={searchCareScriberPatients}>
+            Search Patient
+          </button>
+        </div>
 
         {search && !selectedPatient && filteredPatients.length === 0 && (
           <p style={styles.muted}>No matching patient found.</p>
@@ -405,17 +727,18 @@ REFERRAL / PRESCRIPTION
 
         {filteredPatients.map((p) => (
           <button key={p.id} style={styles.patientCard} onClick={() => selectPatient(p)}>
-            <strong>{p.first_name} {p.surname}</strong>
+            <strong>{p.first_name} {patientSurname(p)}</strong>
             <span>
-              ID: {p.id_number || p.patient_id || "N/A"} · Age: {p.age || "N/A"} · {p.gender || "N/A"}
+              ID: {patientIdValue(p) || "N/A"} · Age: {calculateAge(patientDob(p), p.age)} · {p.gender || "N/A"} · {patientMobile(p) || "No mobile"}
             </span>
           </button>
         ))}
 
         {selectedPatient && (
           <div style={styles.selected}>
-            Selected: {selectedPatient.first_name} {selectedPatient.surname} · ID:{" "}
-            {selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}
+            Selected: {selectedPatient.first_name} {patientSurname(selectedPatient)} · ID:{" "}
+            {patientIdValue(selectedPatient) || "Not captured"} · DOB:{" "}
+            {patientDob(selectedPatient) || "Not captured"}
           </div>
         )}
 
@@ -549,6 +872,8 @@ const styles: Record<string, CSSProperties> = {
   divider: { border: 0, borderTop: "1px solid #e2e8f0", margin: "32px 0" },
   heading: { fontSize: 34, fontWeight: 900, marginBottom: 18 },
   input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 20, padding: 18, fontSize: 20 },
+  twoCol: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 },
+  searchRow: { display: "grid", gridTemplateColumns: "1fr", gap: 12 },
   muted: { color: "#64748b", fontSize: 18 },
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, marginTop: 12, display: "grid", gap: 6, fontSize: 18 },
   selected: { marginTop: 16, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
@@ -564,8 +889,8 @@ const styles: Record<string, CSSProperties> = {
   primaryButton: { width: "100%", border: 0, borderRadius: 20, padding: 22, background: "#2563eb", color: "#fff", fontSize: 22, fontWeight: 900, marginTop: 16 },
   lightButton: { width: "100%", border: 0, borderRadius: 20, padding: 20, background: "#dbeafe", color: "#1d4ed8", fontSize: 20, fontWeight: 900, marginTop: 16 },
   pdfButton: { width: "100%", border: 0, borderRadius: 20, padding: 20, background: "#0f172a", color: "#fff", fontSize: 20, fontWeight: 900, marginTop: 18 },
+  smallButton: { border: 0, borderRadius: 14, padding: 14, background: "#0f172a", color: "#fff", fontWeight: 900, fontSize: 16 },
   message: { background: "#e0f2fe", color: "#075985", padding: 14, borderRadius: 14, fontWeight: 800, marginTop: 16 },
   noteBox: { whiteSpace: "pre-wrap", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, fontSize: 15, marginTop: 18, overflowX: "auto" },
   recentCard: { border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginBottom: 12, display: "grid", gap: 8 },
-  smallButton: { border: 0, borderRadius: 14, padding: 12, background: "#2563eb", color: "#fff", fontWeight: 900 },
 };
