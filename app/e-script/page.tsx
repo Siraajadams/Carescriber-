@@ -183,6 +183,27 @@ function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+function downloadHtmlFile(filename: string, html: string) {
+  try {
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const safeName = filename.endsWith(".html") ? filename : `${filename}.html`;
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = safeName;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function EScriptPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
@@ -410,15 +431,12 @@ export default function EScriptPage() {
   }
 
   function printPdf() {
-    const win = window.open("", "_blank");
-    if (!win) {
-      setMessage("Popup blocked. Please allow popups to export PDF.");
-      return;
+    const ok = downloadHtmlFile(`${scriptNumber}.html`, buildPdfHtml());
+    if (ok) {
+      setMessage("Prescription file downloaded. Open it from Downloads/Files and use Share or Print to save as PDF on iPhone.");
+    } else {
+      setMessage("Could not create prescription file. Please try Safari/Chrome or update iOS browser settings.");
     }
-    win.document.write(buildPdfHtml());
-    win.document.close();
-    win.focus();
-    win.print();
   }
 
   async function savePrescription() {
