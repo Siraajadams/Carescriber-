@@ -285,83 +285,63 @@ export default function ConsultationPage() {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("symptomai_referrals")
-      .select("*")
-      .eq("referral_code", code)
-      .eq("consent_token", token)
-      .limit(1);
+    try {
+      const lookupRes = await fetch("/api/referral-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referralCode: code, consentToken: token }),
+      });
 
-    if (error) {
-      setReferralLoading(false);
-      setReferralNote("Referral lookup failed: " + error.message);
-      return;
-    }
+      const lookupData = await lookupRes.json().catch(() => ({}));
 
-    if (!data || data.length === 0) {
-      setReferralLoading(false);
-      setReferralNote("No referral found for that code and consent token.");
-      return;
-    }
-
-    const foundReferral = data[0] as SymptomReferral;
-
-    if (foundReferral.expires_at && new Date(foundReferral.expires_at) < new Date()) {
-      setReferralLoading(false);
-      setReferralNote("This referral has expired. Ask the patient to generate a new referral.");
-      return;
-    }
-
-    if (!foundReferral.consent_given) {
-      setReferralLoading(false);
-      setReferralNote("The patient has not granted consent to share this referral.");
-      return;
-    }
-
-    setReferral(foundReferral);
-
-    if (foundReferral.patient_id) {
-      const { data: patientData, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", foundReferral.patient_id)
-        .limit(1);
-
-      if (patientError) {
-        setReferralLoading(false);
-        setReferralNote("Referral found, but patient load failed: " + patientError.message);
+      if (!lookupRes.ok) {
+        setReferralNote(
+          "Referral lookup failed: " +
+            (lookupData.error || "Could not unlock referral.")
+        );
         return;
       }
 
-      if (patientData && patientData.length > 0) {
-        selectPatient(mapPatient(patientData[0]));
+      const referralFound = lookupData.referral as SymptomReferral;
+      setReferral(referralFound);
+
+      const openRes = await fetch("/api/referral-open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referralId: referralFound.id }),
+      });
+
+      const openData = await openRes.json().catch(() => ({}));
+
+      if (!openRes.ok) {
+        setReferralNote(
+          "Referral opened, but patient load failed: " +
+            (openData.error || "Could not load patient.")
+        );
+        return;
       }
+
+      if (openData.patient) {
+        selectPatient(mapPatient(openData.patient));
+      }
+
+      const triageText = openData.triage
+        ? `SYMPTOMAI TRIAGE DETAILS:\n${JSON.stringify(openData.triage, null, 2)}`
+        : referralFound.triage_snapshot
+          ? `SYMPTOMAI TRIAGE DETAILS:\n${JSON.stringify(referralFound.triage_snapshot, null, 2)}`
+          : "";
+
+      if (triageText) {
+        setTranscript((prev) => `${triageText}\n\n${prev}`.trim());
+      }
+
+      setConsent(true);
+      setReferralNote("Referral unlocked. Patient profile and SymptomAI triage are loaded.");
+    } catch (err: any) {
+      setReferralNote("Referral lookup failed: " + (err.message || "Unknown error"));
+    } finally {
+      setReferralLoading(false);
     }
-
-    const triageText = [
-      foundReferral.triage_summary ? `SYMPTOMAI TRIAGE SUMMARY:\n${foundReferral.triage_summary}` : "",
-      foundReferral.urgency_level ? `Urgency: ${foundReferral.urgency_level}` : "",
-      foundReferral.recommendation ? `Recommendation: ${foundReferral.recommendation}` : "",
-      foundReferral.triage_snapshot ? `Triage details:\n${JSON.stringify(foundReferral.triage_snapshot, null, 2)}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    if (triageText) {
-      setTranscript((prev) => `${triageText}\n\n${prev}`.trim());
-    }
-
-    await supabase
-      .from("symptomai_referrals")
-      .update({
-        viewed_at: new Date().toISOString(),
-        status: "Viewed",
-      })
-      .eq("id", foundReferral.id);
-
-    setReferralLoading(false);
-    setConsent(true);
-    setReferralNote("Referral unlocked. Patient profile and SymptomAI triage are loaded.");
   }
 
   function newConsultation() {
