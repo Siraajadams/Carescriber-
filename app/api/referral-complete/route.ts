@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Missing Supabase environment variables");
+  return createClient(url, key);
+}
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = getSupabase();
     const { referralId, consultationId } = await req.json();
 
     if (!referralId) {
-      return NextResponse.json(
-        { error: "Referral ID is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Referral ID is required." }, { status: 400 });
     }
 
     const { data, error } = await supabase
