@@ -562,15 +562,34 @@ Assessment:
 - Differential diagnosis to be confirmed by clinician.
 
 Plan:
-- Treatment plan to be confirmed by clinician.
-- Consider ICD-10 coding.
-- Consider prescription if clinically appropriate.
-- Consider sick note if clinically appropriate.
-- Provide patient education.
-- Arrange follow-up if required.
+- Review SymptomAI triage findings and confirm the diagnosis clinically.
+- Perform focused clinical examination based on the presenting symptoms.
+- Check vital signs if clinically indicated: BP, pulse, temperature, respiratory rate and oxygen saturation.
+- Assess severity, duration, red flags, pregnancy status, allergies, current medicines and comorbid risk factors.
+- Provide treatment according to the confirmed diagnosis, local prescribing rules, SA STG/EML principles and pharmacist/doctor scope of practice.
+- If symptoms are worsening, prolonged, recurrent, severe, or associated with red flags, escalate to GP / emergency care.
+- Provide safety-net advice: return urgently if chest pain, shortness of breath, severe headache, persistent fever, confusion, dehydration, bleeding, neurological symptoms, visual disturbance, severe abdominal pain, or worsening symptoms occur.
+- Counsel the patient on medicine use, dosing, side effects, adherence, expected response and when to seek urgent help.
+- Follow up within 24–72 hours depending on severity and clinical judgement.
+- Consider prescription, sick note, referral letter, pathology, or further investigation only after clinician confirmation.
 
 ICD-10 SUGGESTIONS
-- To be confirmed by clinician.
+- R51 - Headache, if headache symptoms are present.
+- G43.9 - Migraine, unspecified, if migraine is clinically confirmed.
+- K30 - Functional dyspepsia, if gastric / indigestion symptoms are present.
+- M54.9 - Dorsalgia, unspecified, if backache is present.
+- R50.9 - Fever, unspecified, if fever is present.
+- R10.4 - Other and unspecified abdominal pain, if stomach cramps / abdominal pain are present.
+- N39.0 - Urinary tract infection, site not specified, if UTI symptoms are clinically confirmed.
+- J00 - Acute nasopharyngitis / common cold, if cold and flu symptoms are present.
+- H10.9 - Conjunctivitis, unspecified, if red eye / eye infection symptoms are clinically confirmed.
+- H92.0 - Otalgia, if earache is present.
+- K08.8 - Other specified disorders of teeth and supporting structures, if dental pain is present.
+- L50.9 - Urticaria, unspecified, if allergic rash / hives are present.
+- Z71.9 - Counselling, unspecified, if only advice or reassurance is provided.
+
+Clinical note:
+- ICD-10 codes are suggestions only. The clinician must confirm the final diagnosis, treatment plan and ICD-10 code before issuing any prescription, referral or sick note.
 
 REFERRAL / PRESCRIPTION
 - Draft only. Clinician must verify before issuing.
