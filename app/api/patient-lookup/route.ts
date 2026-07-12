@@ -12,7 +12,8 @@ function normalizePatientId(value: unknown) {
   return String(value || "")
     .replace(/\s+/g, "")
     .replace(/-/g, "")
-    .trim();
+    .trim()
+    .toUpperCase();
 }
 
 export async function POST(req: NextRequest) {
@@ -33,44 +34,61 @@ export async function POST(req: NextRequest) {
 
     const supabase = getSupabaseAdmin();
 
-    console.log("PATIENT LOOKUP:", patientId);
-
     const { data: patients, error } = await supabase
       .from("patients")
       .select(`
         id,
         patient_id,
+        id_number,
+        national_id,
         first_name,
         surname,
+        last_name,
         date_of_birth,
+        dob,
+        age,
         gender,
         mobile,
-        email
-      `);
+        phone,
+        email,
+        medical_aid,
+        allergies,
+        current_medicines
+      `)
+      .limit(500);
 
     if (error) {
-      console.error("Patient lookup error:", error);
+      console.error(
+        "CARESCRIBER PATIENT LOOKUP DATABASE ERROR:",
+        error
+      );
 
       return NextResponse.json(
         {
           found: false,
-          error: error.message,
+          error: `Patient lookup failed: ${error.message}`,
         },
         { status: 500 }
       );
     }
 
     const patient =
-      patients?.find(
-        (p) => normalizePatientId(p.patient_id) === patientId
-      ) || null;
+      patients?.find((item) => {
+        const storedPatientId = normalizePatientId(
+          item.patient_id ||
+            item.id_number ||
+            item.national_id
+        );
+
+        return storedPatientId === patientId;
+      }) || null;
 
     if (!patient) {
       return NextResponse.json({
         found: false,
         patient: null,
         message:
-          "No existing patient found. Continue with registration.",
+          "No existing patient was found. Continue with patient registration.",
       });
     }
 
@@ -78,26 +96,51 @@ export async function POST(req: NextRequest) {
       found: true,
       patient: {
         id: patient.id,
-        patientId: patient.patient_id,
-        firstName: patient.first_name,
-        surname: patient.surname,
-        dateOfBirth: patient.date_of_birth,
-        gender: patient.gender,
-        mobile: patient.mobile,
-        email: patient.email,
+        patientId:
+          patient.patient_id ||
+          patient.id_number ||
+          patient.national_id ||
+          "",
+        firstName: patient.first_name || "",
+        surname:
+          patient.surname ||
+          patient.last_name ||
+          "",
+        dateOfBirth:
+          patient.date_of_birth ||
+          patient.dob ||
+          null,
+        age: patient.age || null,
+        gender: patient.gender || "",
+        mobile:
+          patient.mobile ||
+          patient.phone ||
+          "",
+        email: patient.email || "",
+        medicalAid: patient.medical_aid || "",
+        allergies:
+          patient.allergies ||
+          "No known allergies",
+        currentMedicines:
+          patient.current_medicines || "",
       },
       message: "Existing patient found.",
     });
-  } catch (err) {
-    console.error("PATIENT LOOKUP ERROR:", err);
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Unexpected patient lookup error.";
+
+    console.error(
+      "CARESCRIBER PATIENT LOOKUP ERROR:",
+      error
+    );
 
     return NextResponse.json(
       {
         found: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : "Unexpected server error.",
+        error: message,
       },
       { status: 500 }
     );
