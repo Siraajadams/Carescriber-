@@ -10,13 +10,13 @@ export function getSupabaseAdmin() {
 
   if (!supabaseUrl) {
     throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL is missing."
+      "NEXT_PUBLIC_SUPABASE_URL is missing from the environment variables."
     );
   }
 
   if (!serviceRoleKey) {
     throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is missing."
+      "SUPABASE_SERVICE_ROLE_KEY is missing from the environment variables."
     );
   }
 
@@ -24,6 +24,7 @@ export function getSupabaseAdmin() {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
+      detectSessionInUrl: false,
     },
   });
 }
