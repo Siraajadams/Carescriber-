@@ -16,6 +16,42 @@ function normalizePatientId(value: unknown) {
     .toUpperCase();
 }
 
+function calculateAge(dateValue: unknown): number | null {
+  if (!dateValue) return null;
+
+  const rawDate = String(dateValue).trim();
+
+  if (!rawDate) return null;
+
+  const dateOfBirth = new Date(rawDate);
+
+  if (Number.isNaN(dateOfBirth.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+
+  let age = today.getFullYear() - dateOfBirth.getFullYear();
+
+  const monthDifference =
+    today.getMonth() - dateOfBirth.getMonth();
+
+  const birthdayHasNotOccurred =
+    monthDifference < 0 ||
+    (monthDifference === 0 &&
+      today.getDate() < dateOfBirth.getDate());
+
+  if (birthdayHasNotOccurred) {
+    age -= 1;
+  }
+
+  if (age < 0 || age > 130) {
+    return null;
+  }
+
+  return age;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as LookupRequest;
@@ -46,9 +82,9 @@ export async function POST(req: NextRequest) {
         last_name,
         date_of_birth,
         dob,
-        age,
         gender,
         mobile,
+        mobile_number,
         phone,
         email,
         medical_aid,
@@ -74,13 +110,16 @@ export async function POST(req: NextRequest) {
 
     const patient =
       patients?.find((item) => {
-        const storedPatientId = normalizePatientId(
-          item.patient_id ||
-            item.id_number ||
-            item.national_id
-        );
+        const possibleIds = [
+          item.patient_id,
+          item.id_number,
+          item.national_id,
+        ];
 
-        return storedPatientId === patientId;
+        return possibleIds.some(
+          (value) =>
+            normalizePatientId(value) === patientId
+        );
       }) || null;
 
     if (!patient) {
@@ -92,38 +131,72 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const dateOfBirth =
+      patient.date_of_birth ||
+      patient.dob ||
+      null;
+
+    const age = calculateAge(dateOfBirth);
+
     return NextResponse.json({
       found: true,
       patient: {
         id: patient.id,
+
         patientId:
           patient.patient_id ||
           patient.id_number ||
           patient.national_id ||
+          patientId,
+
+        firstName:
+          patient.first_name ||
           "",
-        firstName: patient.first_name || "",
+
         surname:
           patient.surname ||
           patient.last_name ||
           "",
-        dateOfBirth:
-          patient.date_of_birth ||
-          patient.dob ||
-          null,
-        age: patient.age || null,
-        gender: patient.gender || "",
+
+        fullName: [
+          patient.first_name,
+          patient.surname || patient.last_name,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim(),
+
+        dateOfBirth,
+
+        age,
+
+        gender:
+          patient.gender ||
+          "",
+
         mobile:
           patient.mobile ||
+          patient.mobile_number ||
           patient.phone ||
           "",
-        email: patient.email || "",
-        medicalAid: patient.medical_aid || "",
+
+        email:
+          patient.email ||
+          "",
+
+        medicalAid:
+          patient.medical_aid ||
+          "",
+
         allergies:
           patient.allergies ||
           "No known allergies",
+
         currentMedicines:
-          patient.current_medicines || "",
+          patient.current_medicines ||
+          "",
       },
+
       message: "Existing patient found.",
     });
   } catch (error: unknown) {
