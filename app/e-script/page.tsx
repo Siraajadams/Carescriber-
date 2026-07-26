@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import medicineData from "../../medicine.json";
 
@@ -217,10 +216,9 @@ function downloadHtmlFile(filename: string, html: string) {
 }
 
 export default function EScriptPage() {
-  const searchParams = useSearchParams();
-  const linkedPatientId = searchParams.get("patientId");
-
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [linkedPatientId, setLinkedPatientId] = useState<string | null>(null);
+  const [pageInitialised, setPageInitialised] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [patientLoading, setPatientLoading] = useState(false);
 
@@ -248,6 +246,18 @@ export default function EScriptPage() {
   const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const patientIdFromUrl = params.get("patientId");
+
+    setLinkedPatientId(patientIdFromUrl);
+    setPageInitialised(true);
+  }, []);
+
+  useEffect(() => {
+    if (!pageInitialised) return;
+
     void initialisePage();
 
     try {
@@ -264,7 +274,7 @@ export default function EScriptPage() {
     } finally {
       setLoadingMeds(false);
     }
-  }, [linkedPatientId]);
+  }, [pageInitialised, linkedPatientId]);
 
   async function initialisePage() {
     await Promise.all([loadPatients(), loadDoctor(), loadHistory()]);
