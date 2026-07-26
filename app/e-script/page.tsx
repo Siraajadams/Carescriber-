@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import jsPDF from "jspdf";
 import { supabase } from "../../lib/supabase";
 import medicineData from "../../medicine.json";
 
@@ -194,25 +195,18 @@ function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-function downloadHtmlFile(filename: string, html: string) {
-  try {
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const safeName = filename.endsWith(".html") ? filename : `${filename}.html`;
+function blobToBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
 
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = safeName;
-    link.rel = "noopener";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    reader.onloadend = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
 
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-    return true;
-  } catch {
-    return false;
-  }
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 export default function EScriptPage() {
@@ -244,6 +238,7 @@ export default function EScriptPage() {
   const [message, setMessage] = useState("");
   const [scriptNumber, setScriptNumber] = useState(`RX-${Date.now()}`);
   const [history, setHistory] = useState<any[]>([]);
+  const [emailing, setEmailing] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -698,12 +693,201 @@ export default function EScriptPage() {
     </body></html>`;
   }
 
-  function printPdf() {
-    const ok = downloadHtmlFile(`${scriptNumber}.html`, buildPdfHtml());
-    if (ok) {
-      setMessage("Prescription file downloaded. Open it from Downloads/Files and use Share or Print to save as PDF on iPhone.");
+  function generatePrescriptionPdfBlob() {
+    const patient = selectedPatient;
+    const patientFullName = patientName() || "Patient not selected";
+    const dob = clean(patient?.date_of_birth || patient?.dob);
+    const age = calcAge(dob, patient?.age);
+    const signature = signatureDataUrl();
+
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "mm",
+      format: "a4",
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const left = 16;
+    const right = pageWidth - 16;
+    let y = 18;
+
+    function ensureSpace(required = 18) {
+      if (y + required > 282) {
+        pdf.addPage();
+        y = 18;
+      }
+    }
+
+    function addLabelValue(label: string, value: string) {
+      ensureSpace(9);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10);
+      pdf.text(`${label}:`, left, y);
+
+      pdf.setFont("helvetica", "normal");
+      const lines = pdf.splitTextToSize(value || "Not captured", right - left - 42);
+      pdf.text(lines, left + 42, y);
+      y += Math.max(6, lines.length * 5);
+    }
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(24);
+    pdf.text("CareScriber", left, y);
+    y += 8;
+
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(11);
+    pdf.text("Electronic Prescription", left, y);
+    y += 10;
+
+    pdf.setDrawColor(203, 213, 225);
+    pdf.line(left, y, right, y);
+    y += 8;
+
+    addLabelValue("Script number", scriptNumber);
+    addLabelValue("Issued on", today());
+    addLabelValue("Patient", patientFullName);
+    addLabelValue(
+      "Patient identifier",
+      patient?.id_number || patient?.patient_id || "Not captured"
+    );
+    addLabelValue("Gender", clean(patient?.gender) || "Not captured");
+    addLabelValue(
+      "Age / DOB",
+      `${age || "Not captured"}${dob ? ` / ${dob}` : ""}`
+    );
+    addLabelValue("Mobile", clean(patient?.mobile) || "Not captured");
+    addLabelValue("Email", clean(patient?.email) || "Not captured");
+    addLabelValue("Medical aid", clean(patient?.medical_aid) || "Not captured");
+    addLabelValue(
+      "Medical aid number",
+      clean(patient?.medical_aid_number) || "Not captured"
+    );
+
+    y += 4;
+    ensureSpace(20);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(14);
+    pdf.text("Prescriber", left, y);
+    y += 8;
+
+    addLabelValue("Doctor", doctorName);
+    addLabelValue("HPCSA / Council", hpcsa || "Not captured");
+    addLabelValue("Practice number", practiceNumber || "Not captured");
+    addLabelValue("Mobile", doctorMobile || "Not captured");
+    addLabelValue("Email", doctorEmail || "Not captured");
+    addLabelValue("Practice address", practiceAddress || "Not captured");
+
+    y += 5;
+    ensureSpace(20);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(14);
+    pdf.text("Prescription", left, y);
+    y += 8;
+
+    items.forEach((item, index) => {
+      ensureSpace(42);
+
+      const medicineName =
+        item.medicine?.brand || item.medicineQuery || "Medicine not captured";
+      const strength = [item.medicine?.strength, item.medicine?.unit]
+        .filter(Boolean)
+        .join(" ");
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.text(`${index + 1}. ${medicineName}`, left, y);
+      y += 6;
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+
+      const details = [
+        item.icdCode
+          ? `ICD-10: ${item.icdCode}${
+              item.icdDescription ? ` — ${item.icdDescription}` : ""
+            }`
+          : "",
+        strength ? `Strength: ${strength}` : "",
+        `Directions: ${item.dosage} ${item.form} ${item.frequency} ${item.timing} for ${item.duration} days`,
+        `Repeats: ${item.repeats}`,
+        `Substitution: ${item.substitution}`,
+        item.notes ? `Notes: ${item.notes}` : "",
+      ].filter(Boolean);
+
+      details.forEach((line) => {
+        const wrapped = pdf.splitTextToSize(line, right - left);
+        ensureSpace(wrapped.length * 5 + 2);
+        pdf.text(wrapped, left + 4, y);
+        y += wrapped.length * 5;
+      });
+
+      y += 5;
+    });
+
+    ensureSpace(45);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(12);
+    pdf.text("Doctor signature", left, y);
+    y += 5;
+
+    if (signature && signature !== "data:,") {
+      try {
+        pdf.addImage(signature, "PNG", left, y, 55, 22);
+        y += 26;
+      } catch {
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(10);
+        pdf.text("Signature image could not be added.", left, y);
+        y += 7;
+      }
     } else {
-      setMessage("Could not create prescription file. Please try Safari/Chrome or update iOS browser settings.");
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.text("Signature not captured.", left, y);
+      y += 7;
+    }
+
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.setTextColor(100);
+    const footer = pdf.splitTextToSize(
+      "This prescription must be clinically checked and signed by the prescriber before dispensing.",
+      right - left
+    );
+    pdf.text(footer, left, 289 - footer.length * 3);
+
+    return pdf.output("blob");
+  }
+
+  function printPdf() {
+    try {
+      if (!selectedPatient) {
+        setMessage("Please select a patient before creating the PDF.");
+        return;
+      }
+
+      const blob = generatePrescriptionPdfBlob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = `${scriptNumber}.pdf`;
+      link.rel = "noopener";
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setMessage("Prescription PDF downloaded successfully.");
+    } catch (error) {
+      console.error("PDF generation error:", error);
+      setMessage(
+        error instanceof Error
+          ? "Could not generate the prescription PDF: " + error.message
+          : "Could not generate the prescription PDF."
+      );
     }
   }
 
@@ -739,10 +923,68 @@ export default function EScriptPage() {
     loadHistory();
   }
 
-  function emailPrescription() {
-    const subject = encodeURIComponent(`Prescription ${scriptNumber} - ${patientName()}`);
-    const body = encodeURIComponent(`Good day,\n\nPlease find prescription ${scriptNumber} for ${patientName()} attached.\n\nThe doctor should export/print the PDF and attach it before sending.\n\nKind regards,\n${doctorName}`);
-    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  async function emailPrescription() {
+    if (emailing) return;
+
+    if (!selectedPatient) {
+      setMessage("Please select a patient before emailing the prescription.");
+      return;
+    }
+
+    const suggestedEmail = selectedPatient.email || "";
+    const recipient = window.prompt(
+      "Enter the email address that should receive the prescription:",
+      suggestedEmail
+    );
+
+    if (!recipient?.trim()) {
+      setMessage("Email cancelled because no recipient address was entered.");
+      return;
+    }
+
+    setEmailing(true);
+    setMessage("");
+
+    try {
+      const pdfBlob = generatePrescriptionPdfBlob();
+      const pdfBase64 = await blobToBase64(pdfBlob);
+
+      const response = await fetch("/api/prescriptions/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: recipient.trim(),
+          subject: `Prescription ${scriptNumber} - ${patientName()}`,
+          body: `Good day,
+
+Please find prescription ${scriptNumber} for ${patientName()} attached.
+
+Kind regards,
+${doctorName}`,
+          filename: `${scriptNumber}.pdf`,
+          pdfBase64,
+        }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(result?.error || "The prescription email could not be sent.");
+      }
+
+      setMessage(`Prescription PDF emailed successfully to ${recipient.trim()}.`);
+    } catch (error) {
+      console.error("Prescription email error:", error);
+      setMessage(
+        error instanceof Error
+          ? "Prescription email failed: " + error.message
+          : "Prescription email failed."
+      );
+    } finally {
+      setEmailing(false);
+    }
   }
 
   return (
@@ -920,7 +1162,16 @@ export default function EScriptPage() {
         {message && <div style={styles.message}>{message}</div>}
         <button style={styles.primaryButton} onClick={savePrescription}>Save Prescription</button>
         <button style={styles.pdfButton} onClick={printPdf}>Download / Print PDF</button>
-        <button style={styles.emailButton} onClick={emailPrescription}>Email Prescription</button>
+        <button
+          style={{
+            ...styles.emailButton,
+            ...(emailing ? styles.disabledButton : {}),
+          }}
+          onClick={emailPrescription}
+          disabled={emailing}
+        >
+          {emailing ? "Emailing PDF..." : "Email Prescription PDF"}
+        </button>
 
         <h2 style={styles.heading}>Prescription History</h2>
         {history.length === 0 && <p style={styles.muted}>No saved prescription history yet.</p>}
@@ -965,6 +1216,7 @@ const styles: Record<string, CSSProperties> = {
   primaryButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#2563eb", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 18 },
   pdfButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#0f172a", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 14 },
   emailButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#16a34a", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 14 },
+  disabledButton: { opacity: 0.65, cursor: "not-allowed" },
   canvas: { width: "100%", height: 190, border: "2px dashed #cbd5e1", borderRadius: 18, background: "#fff", touchAction: "none" },
   message: { background: "#e0f2fe", color: "#075985", padding: 14, borderRadius: 14, fontWeight: 800, marginTop: 18 },
   historyRow: { border: "1px solid #cbd5e1", borderRadius: 16, padding: 14, marginTop: 10, display: "grid", gap: 6 },
