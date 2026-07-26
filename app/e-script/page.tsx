@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import medicineData from "../../medicine.json";
 
@@ -216,8 +217,12 @@ function downloadHtmlFile(filename: string, html: string) {
 }
 
 export default function EScriptPage() {
+  const searchParams = useSearchParams();
+  const linkedPatientId = searchParams.get("patientId");
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
+  const [patientLoading, setPatientLoading] = useState(false);
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [medicines, setMedicines] = useState<Medicine[]>([]);
@@ -243,19 +248,39 @@ export default function EScriptPage() {
   const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
-    loadPatients();
-    loadDoctor();
-    loadHistory();
+    void initialisePage();
 
     try {
       const raw = Array.isArray(medicineData) ? medicineData : [];
-      setMedicines(raw.map(normaliseMedicine).filter((m) => m.brand || m.active || m.nappi));
+      setMedicines(
+        raw
+          .map(normaliseMedicine)
+          .filter((m) => m.brand || m.active || m.nappi)
+      );
     } catch {
-      setMessage("Medicine file could not be loaded. Confirm medicine.json exists in the project root.");
+      setMessage(
+        "Medicine file could not be loaded. Confirm medicine.json exists in the project root."
+      );
     } finally {
       setLoadingMeds(false);
     }
-  }, []);
+  }, [linkedPatientId]);
+
+  async function initialisePage() {
+    await Promise.all([loadPatients(), loadDoctor(), loadHistory()]);
+
+    let patientId = linkedPatientId;
+
+    if (!patientId && typeof window !== "undefined") {
+      patientId = window.sessionStorage.getItem(
+        "carescriber_selected_patient_id"
+      );
+    }
+
+    if (patientId) {
+      await loadLinkedPatient(patientId);
+    }
+  }
 
 
 
@@ -266,6 +291,58 @@ export default function EScriptPage() {
       return;
     }
     setPatients((data || []) as Patient[]);
+  }
+
+  async function loadLinkedPatient(patientId: string) {
+    setPatientLoading(true);
+    setMessage("");
+
+    try {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", patientId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Linked patient load error:", error);
+        setMessage(
+          "The selected patient could not be loaded: " + error.message
+        );
+        return;
+      }
+
+      if (!data) {
+        setMessage(
+          "The selected patient was not found. Please search for the patient again."
+        );
+        return;
+      }
+
+      const patient = data as Patient;
+      setSelectedPatient(patient);
+      setPatientSearch(
+        `${patient.first_name || ""} ${
+          patient.surname || patient.last_name || ""
+        }`.trim()
+      );
+
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(
+          "carescriber_selected_patient_id",
+          patient.id
+        );
+      }
+    } catch (error) {
+      console.error("Unexpected linked patient load error:", error);
+      setMessage(
+        error instanceof Error
+          ? "The selected patient could not be loaded: " + error.message
+          : "An unexpected error occurred while loading the selected patient."
+      );
+    } finally {
+      setPatientLoading(false);
+    }
   }
 
   async function loadDoctor() {
@@ -459,6 +536,24 @@ export default function EScriptPage() {
     setSelectedPatient(p);
     setPatientSearch(patientName(p));
     setMessage("");
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(
+        "carescriber_selected_patient_id",
+        p.id
+      );
+    }
+  }
+
+  function clearSelectedPatient() {
+    setSelectedPatient(null);
+    setPatientSearch("");
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(
+        "carescriber_selected_patient_id"
+      );
+    }
   }
 
   function medicineResults(query: string) {
@@ -658,10 +753,76 @@ export default function EScriptPage() {
         <div style={styles.notice}>Medicine database: {loadingMeds ? "Loading..." : `${medicines.length.toLocaleString()} medicines loaded`} · Script No: {scriptNumber}</div>
 
         <h2 style={styles.heading}>Patient</h2>
-        <input style={styles.input} value={patientSearch} placeholder="Search existing patient by name, ID or mobile" onChange={(e) => { setPatientSearch(e.target.value); setSelectedPatient(null); }} />
-        {filteredPatients.map((p) => <button key={p.id} style={styles.patientCard} onClick={() => selectPatient(p)}><b>{patientName(p)}</b><span>{p.id_number || p.patient_id || "No ID"} · {p.gender || "Gender not captured"} · {p.mobile || "No mobile"}</span></button>)}
-        {patientSearch && !selectedPatient && filteredPatients.length === 0 && <p style={styles.muted}>No matching patient found.</p>}
-        {selectedPatient && <div style={styles.selected}>Selected: {patientName()} · ID: {selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}</div>}
+
+        {patientLoading && (
+          <div style={styles.notice}>Loading selected patient...</div>
+        )}
+
+        <input
+          style={styles.input}
+          value={patientSearch}
+          placeholder="Search existing patient by name, ID or mobile"
+          onChange={(e) => {
+            setPatientSearch(e.target.value);
+            setSelectedPatient(null);
+
+            if (typeof window !== "undefined") {
+              window.sessionStorage.removeItem(
+                "carescriber_selected_patient_id"
+              );
+            }
+          }}
+        />
+
+        {filteredPatients.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            style={styles.patientCard}
+            onClick={() => selectPatient(p)}
+          >
+            <b>{patientName(p)}</b>
+            <span>
+              {p.id_number || p.patient_id || "No ID"} ·{" "}
+              {p.gender || "Gender not captured"} ·{" "}
+              {p.mobile || "No mobile"}
+            </span>
+          </button>
+        ))}
+
+        {patientSearch &&
+          !selectedPatient &&
+          !patientLoading &&
+          filteredPatients.length === 0 && (
+            <p style={styles.muted}>No matching patient found.</p>
+          )}
+
+        {selectedPatient && (
+          <div style={styles.selected}>
+            <div>
+              Selected: {patientName()} · ID:{" "}
+              {selectedPatient.id_number ||
+                selectedPatient.patient_id ||
+                "Not captured"}
+            </div>
+
+            <div>
+              DOB:{" "}
+              {selectedPatient.date_of_birth ||
+                selectedPatient.dob ||
+                "Not captured"}{" "}
+              · Mobile: {selectedPatient.mobile || "Not captured"}
+            </div>
+
+            <button
+              type="button"
+              style={styles.changePatientButton}
+              onClick={clearSelectedPatient}
+            >
+              Change Patient
+            </button>
+          </div>
+        )}
 
         <h2 style={styles.heading}>Doctor</h2>
         {doctorLoading && <div style={styles.notice}>Loading logged-in doctor profile...</div>}
@@ -777,7 +938,8 @@ const styles: Record<string, CSSProperties> = {
   input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10, background: "#fff" },
   textareaSmall: { width: "100%", boxSizing: "border-box", minHeight: 88, border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10 },
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginTop: 10, display: "grid", gap: 6, fontSize: 17 },
-  selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
+  selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17, display: "grid", gap: 8 },
+  changePatientButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#166534", color: "#fff", fontWeight: 900, cursor: "pointer" },
   doctorSummary: { display: "grid", gap: 6, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 16 },
   smallEditButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#e2e8f0", color: "#0f172a", fontWeight: 900 },
   saveDoctorButton: { width: "100%", border: 0, borderRadius: 18, padding: 16, background: "#16a34a", color: "#fff", fontWeight: 900, fontSize: 18, marginTop: 14 },
