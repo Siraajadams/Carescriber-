@@ -58,15 +58,16 @@ type ScriptItem = {
 };
 
 type DoctorProfile = {
-  id?: string;
-  first_name?: string;
-  surname?: string;
-  email?: string;
-  mobile?: string;
-  hpcsa?: string;
-  registration_number?: string;
-  practice_number?: string;
-  practice_address?: string;
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  surname: string | null;
+  email: string | null;
+  mobile: string | null;
+  registration_number: string | null;
+  practice_number: string | null;
+  practice_address: string | null;
+  country: string | null;
 };
 
 const icd10List = [
@@ -106,6 +107,16 @@ function newItem(): ScriptItem {
 
 function clean(value?: string | null) {
   return value || "";
+}
+
+function splitDoctorName(value: string) {
+  const withoutTitle = value.replace(/^\s*dr\.?\s+/i, "").trim();
+  const parts = withoutTitle.split(/\s+/).filter(Boolean);
+
+  return {
+    firstName: parts[0] || "",
+    lastName: parts.slice(1).join(" "),
+  };
 }
 
 function calcAge(dob?: string | null, fallback?: number | null) {
@@ -222,6 +233,9 @@ export default function EScriptPage() {
   const [practiceNumber, setPracticeNumber] = useState("");
   const [practiceAddress, setPracticeAddress] = useState("");
   const [editDoctor, setEditDoctor] = useState(false);
+  const [doctorLoading, setDoctorLoading] = useState(true);
+  const [doctorSaving, setDoctorSaving] = useState(false);
+  const [doctorProfile, setDoctorProfile] = useState<DoctorProfile | null>(null);
 
   const [items, setItems] = useState<ScriptItem[]>([newItem()]);
   const [message, setMessage] = useState("");
@@ -255,24 +269,173 @@ export default function EScriptPage() {
   }
 
   async function loadDoctor() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    setDoctorLoading(true);
 
-    const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
-    const profile = data as DoctorProfile | null;
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (profile) {
-      const name = `${profile.first_name || ""} ${profile.surname || ""}`.trim();
-      setDoctorName(name ? (name.startsWith("Dr") ? name : `Dr ${name}`) : "Dr");
+      if (userError) {
+        setMessage("Doctor login error: " + userError.message);
+        setEditDoctor(true);
+        return;
+      }
+
+      if (!user) {
+        setMessage("No logged-in doctor was found. Please log in again.");
+        setEditDoctor(true);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select(
+          "id, first_name, last_name, surname, email, mobile, registration_number, practice_number, practice_address, country"
+        )
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Doctor profile retrieval failed:", error);
+        setDoctorEmail(user.email || "");
+        setMessage("Doctor profile load error: " + error.message);
+        setEditDoctor(true);
+        return;
+      }
+
+      const profile = data as DoctorProfile | null;
+
+      if (!profile) {
+        setDoctorEmail(user.email || "");
+        setMessage(
+          "No doctor profile is linked to this login. Complete the fields below and press Save Doctor Details."
+        );
+        setEditDoctor(true);
+        return;
+      }
+
+      setDoctorProfile(profile);
+
+      const surnameValue = profile.last_name || profile.surname || "";
+      const fullName = `${profile.first_name || ""} ${surnameValue}`.trim();
+
+      setDoctorName(
+        fullName
+          ? /^dr\.?\s/i.test(fullName)
+            ? fullName
+            : `Dr ${fullName}`
+          : "Dr"
+      );
       setDoctorEmail(profile.email || user.email || "");
       setDoctorMobile(profile.mobile || "");
-      setHpcsa(profile.hpcsa || profile.registration_number || "");
+      setHpcsa(profile.registration_number || "");
       setPracticeNumber(profile.practice_number || "");
       setPracticeAddress(profile.practice_address || "");
-      setEditDoctor(!(name && (profile.hpcsa || profile.registration_number) && profile.practice_number));
-    } else {
-      setDoctorEmail(user.email || "");
+
+      const profileComplete = Boolean(
+        fullName &&
+          profile.registration_number &&
+          profile.practice_number &&
+          profile.mobile &&
+          (profile.email || user.email)
+      );
+
+      setEditDoctor(!profileComplete);
+    } catch (error) {
+      console.error("Unexpected doctor profile error:", error);
+      setMessage(
+        error instanceof Error
+          ? "Doctor profile load error: " + error.message
+          : "An unexpected doctor profile error occurred."
+      );
       setEditDoctor(true);
+    } finally {
+      setDoctorLoading(false);
+    }
+  }
+
+  async function saveDoctorProfile() {
+    if (doctorSaving) return;
+
+    setDoctorSaving(true);
+    setMessage("");
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        setMessage("Doctor login error: " + userError.message);
+        return;
+      }
+
+      if (!user) {
+        setMessage("No logged-in doctor was found. Please log in again.");
+        return;
+      }
+
+      const parsedName = splitDoctorName(doctorName);
+
+      if (!parsedName.firstName || !parsedName.lastName) {
+        setMessage("Please enter the doctor's full first name and surname.");
+        return;
+      }
+
+      if (!hpcsa.trim()) {
+        setMessage("Please enter the HPCSA / council registration number.");
+        return;
+      }
+
+      const profilePayload = {
+        id: user.id,
+        role: "doctor",
+        first_name: parsedName.firstName,
+        last_name: parsedName.lastName,
+        surname: parsedName.lastName,
+        email: doctorEmail.trim().toLowerCase() || user.email || null,
+        mobile: doctorMobile.trim() || null,
+        registration_number: hpcsa.trim(),
+        practice_number: practiceNumber.trim() || null,
+        practice_address: practiceAddress.trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .upsert(profilePayload, { onConflict: "id" })
+        .select(
+          "id, first_name, last_name, surname, email, mobile, registration_number, practice_number, practice_address, country"
+        )
+        .single();
+
+      if (error) {
+        console.error("Doctor profile save failed:", error);
+        setMessage("Doctor profile save failed: " + error.message);
+        return;
+      }
+
+      setDoctorProfile(data as DoctorProfile);
+      setDoctorName(`Dr ${parsedName.firstName} ${parsedName.lastName}`.trim());
+      setDoctorEmail(profilePayload.email || "");
+      setDoctorMobile(profilePayload.mobile || "");
+      setHpcsa(profilePayload.registration_number);
+      setPracticeNumber(profilePayload.practice_number || "");
+      setPracticeAddress(profilePayload.practice_address || "");
+      setEditDoctor(false);
+      setMessage("Doctor details saved and will be loaded automatically on future scripts.");
+    } catch (error) {
+      console.error("Unexpected doctor profile save error:", error);
+      setMessage(
+        error instanceof Error
+          ? "Doctor profile save failed: " + error.message
+          : "An unexpected error occurred while saving the doctor profile."
+      );
+    } finally {
+      setDoctorSaving(false);
     }
   }
 
@@ -501,6 +664,7 @@ export default function EScriptPage() {
         {selectedPatient && <div style={styles.selected}>Selected: {patientName()} · ID: {selectedPatient.id_number || selectedPatient.patient_id || "Not captured"}</div>}
 
         <h2 style={styles.heading}>Doctor</h2>
+        {doctorLoading && <div style={styles.notice}>Loading logged-in doctor profile...</div>}
         <div style={styles.doctorSummary}>
           <b>{doctorName || "Doctor profile not captured"}</b>
           <span>HPCSA / Council: {hpcsa || "Missing"} · Practice: {practiceNumber || "Missing"}</span>
@@ -524,6 +688,14 @@ export default function EScriptPage() {
               <input style={styles.input} value={doctorEmail} onChange={(e) => setDoctorEmail(e.target.value)} placeholder="Doctor email" />
             </div>
             <textarea style={styles.textareaSmall} value={practiceAddress} onChange={(e) => setPracticeAddress(e.target.value)} placeholder="Practice address" />
+            <button
+              type="button"
+              style={styles.saveDoctorButton}
+              onClick={saveDoctorProfile}
+              disabled={doctorSaving}
+            >
+              {doctorSaving ? "Saving Doctor Details..." : "Save Doctor Details"}
+            </button>
           </>
         )}
 
@@ -608,6 +780,7 @@ const styles: Record<string, CSSProperties> = {
   selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
   doctorSummary: { display: "grid", gap: 6, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 16 },
   smallEditButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#e2e8f0", color: "#0f172a", fontWeight: 900 },
+  saveDoctorButton: { width: "100%", border: 0, borderRadius: 18, padding: 16, background: "#16a34a", color: "#fff", fontWeight: 900, fontSize: 18, marginTop: 14 },
   muted: { color: "#64748b", fontSize: 17 },
   grid2: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 },
   rxCard: { border: "1px solid #cbd5e1", borderRadius: 20, padding: 18, marginBottom: 18, background: "#fbfdff" },
