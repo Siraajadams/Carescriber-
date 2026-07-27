@@ -540,6 +540,82 @@ export default function EScriptPage() {
     return `${p.first_name || ""} ${p.surname || p.last_name || ""}`.trim();
   }
 
+  function findPatientFromCurrentSearch() {
+    const query = patientSearch.trim().toLowerCase();
+
+    if (!query) return null;
+
+    const exactMatches = patients.filter((patient) => {
+      const fullName = `${patient.first_name || ""} ${
+        patient.surname || patient.last_name || ""
+      }`
+        .trim()
+        .toLowerCase();
+
+      return (
+        patient.id.toLowerCase() === query ||
+        (patient.id_number || "").toLowerCase() === query ||
+        (patient.patient_id || "").toLowerCase() === query ||
+        fullName === query ||
+        (patient.email || "").toLowerCase() === query ||
+        (patient.mobile || "").toLowerCase() === query
+      );
+    });
+
+    return exactMatches.length === 1 ? exactMatches[0] : null;
+  }
+
+  async function resolveSelectedPatient(): Promise<Patient | null> {
+    if (selectedPatient?.id) {
+      return selectedPatient;
+    }
+
+    const exactSearchMatch = findPatientFromCurrentSearch();
+
+    if (exactSearchMatch) {
+      selectPatient(exactSearchMatch);
+      return exactSearchMatch;
+    }
+
+    let storedPatientId = linkedPatientId;
+
+    if (!storedPatientId && typeof window !== "undefined") {
+      storedPatientId = window.sessionStorage.getItem(
+        "carescriber_selected_patient_id"
+      );
+    }
+
+    if (!storedPatientId) {
+      return null;
+    }
+
+    const localPatient = patients.find(
+      (patient) => patient.id === storedPatientId
+    );
+
+    if (localPatient) {
+      selectPatient(localPatient);
+      return localPatient;
+    }
+
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .eq("id", storedPatientId)
+      .maybeSingle();
+
+    if (error || !data) {
+      if (error) {
+        console.error("Patient recovery error:", error);
+      }
+      return null;
+    }
+
+    const recoveredPatient = data as Patient;
+    selectPatient(recoveredPatient);
+    return recoveredPatient;
+  }
+
   function selectPatient(p: Patient) {
     setSelectedPatient(p);
     setPatientSearch(patientName(p));
@@ -865,10 +941,14 @@ export default function EScriptPage() {
     return pdf.output("blob");
   }
 
-  function printPdf() {
+  async function printPdf() {
     try {
-      if (!selectedPatient) {
-        setMessage("Please select a patient before creating the PDF.");
+      const patient = await resolveSelectedPatient();
+
+      if (!patient) {
+        setMessage(
+          "Please select the patient by tapping the patient result before creating the PDF."
+        );
         return;
       }
 
@@ -899,8 +979,12 @@ export default function EScriptPage() {
   async function persistPrescription(options?: {
     silent?: boolean;
   }): Promise<boolean> {
-    if (!selectedPatient) {
-      setMessage("Please select a patient first.");
+    const patient = await resolveSelectedPatient();
+
+    if (!patient) {
+      setMessage(
+        "Please select the patient by tapping the patient result before saving."
+      );
       return false;
     }
 
@@ -939,8 +1023,8 @@ export default function EScriptPage() {
 
     const payload = {
       prescription_number: scriptNumber,
-      patient_id: selectedPatient.id,
-      patient_name: patientName(),
+      patient_id: patient.id,
+      patient_name: patientName(patient),
       doctor_id: user.id,
       doctor_name: doctorName,
       doctor_hpcsa: hpcsa,
@@ -992,8 +1076,12 @@ export default function EScriptPage() {
   async function emailPrescription() {
     if (emailing) return;
 
-    if (!selectedPatient) {
-      setMessage("Please select a patient before emailing the prescription.");
+    const patient = await resolveSelectedPatient();
+
+    if (!patient) {
+      setMessage(
+        "Please select the patient by tapping the patient result before emailing the prescription."
+      );
       return;
     }
 
@@ -1040,7 +1128,7 @@ https://carescriber.com`,
           filename: `${scriptNumber}.pdf`,
           pdfBase64,
           prescriptionNumber: scriptNumber,
-          patientId: selectedPatient.id,
+          patientId: patient.id,
         }),
       });
 
@@ -1113,6 +1201,12 @@ https://carescriber.com`,
             }
           }}
         />
+
+        {!selectedPatient && filteredPatients.length > 0 && (
+          <div style={styles.patientHint}>
+            Tap the patient result below to confirm the patient for this prescription.
+          </div>
+        )}
 
         {filteredPatients.map((p) => (
           <button
@@ -1323,6 +1417,7 @@ const styles: Record<string, CSSProperties> = {
   fieldLabel: { display: "block", fontWeight: 900, marginTop: 10 },
   input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10, background: "#fff" },
   textareaSmall: { width: "100%", boxSizing: "border-box", minHeight: 88, border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10 },
+  patientHint: { marginTop: 10, background: "#fff7ed", color: "#9a3412", padding: 12, borderRadius: 12, fontWeight: 800 },
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginTop: 10, display: "grid", gap: 6, fontSize: 17 },
   selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17, display: "grid", gap: 8 },
   changePatientButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#166534", color: "#fff", fontWeight: 900, cursor: "pointer" },
