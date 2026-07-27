@@ -4,7 +4,7 @@ import { Resend } from "resend";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type EmailPrescriptionRequest = {
+type PrescriptionEmailRequest = {
   to?: string;
   subject?: string;
   body?: string;
@@ -14,24 +14,19 @@ type EmailPrescriptionRequest = {
 
 export async function POST(req: NextRequest) {
   try {
-    const payload = (await req.json()) as EmailPrescriptionRequest;
+    const payload = (await req.json()) as PrescriptionEmailRequest;
 
     const to = String(payload.to || "").trim();
     const subject = String(payload.subject || "").trim();
     const body = String(payload.body || "").trim();
-    const filename = String(payload.filename || "prescription.pdf").trim();
+    const filename = String(
+      payload.filename || "prescription.pdf"
+    ).trim();
     const pdfBase64 = String(payload.pdfBase64 || "").trim();
 
     if (!to || !to.includes("@")) {
       return NextResponse.json(
         { error: "A valid recipient email address is required." },
-        { status: 400 }
-      );
-    }
-
-    if (!subject) {
-      return NextResponse.json(
-        { error: "The email subject is required." },
         { status: 400 }
       );
     }
@@ -43,35 +38,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const apiKey = process.env.RESEND_API_KEY;
-    const from =
+    const resendApiKey = process.env.RESEND_API_KEY;
+
+    const fromEmail =
       process.env.PRESCRIPTION_FROM_EMAIL ||
-      process.env.RESEND_FROM_EMAIL;
+      "CareScriber ePrescription <prescriptions@carescriber.com>";
 
-    if (!apiKey) {
+    if (!resendApiKey) {
       return NextResponse.json(
-        { error: "RESEND_API_KEY is not configured in Vercel." },
+        { error: "RESEND_API_KEY is not configured." },
         { status: 500 }
       );
     }
 
-    if (!from) {
-      return NextResponse.json(
-        {
-          error:
-            "PRESCRIPTION_FROM_EMAIL or RESEND_FROM_EMAIL is not configured in Vercel.",
-        },
-        { status: 500 }
-      );
-    }
-
-    const resend = new Resend(apiKey);
+    const resend = new Resend(resendApiKey);
 
     const { data, error } = await resend.emails.send({
-      from,
+      from: fromEmail,
       to,
-      subject,
-      text: body || "Please find the prescription attached.",
+      subject:
+        subject || "Electronic Prescription from CareScriber",
+      text:
+        body ||
+        "Please find the electronic prescription attached.",
       attachments: [
         {
           filename: filename.endsWith(".pdf")
@@ -83,10 +72,14 @@ export async function POST(req: NextRequest) {
     });
 
     if (error) {
-      console.error("Resend prescription email error:", error);
+      console.error("Resend email error:", error);
 
       return NextResponse.json(
-        { error: error.message || "The prescription email could not be sent." },
+        {
+          error:
+            error.message ||
+            "The prescription email could not be sent.",
+        },
         { status: 500 }
       );
     }
