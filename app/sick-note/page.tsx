@@ -29,6 +29,11 @@ type DoctorProfile = {
   registration_number?: string;
   practice_number?: string;
   practice_address?: string;
+  qualifications?: string;
+  qualification?: string;
+  phone?: string;
+  address?: string;
+  user_id?: string;
 };
 
 const icd10List = [
@@ -98,6 +103,7 @@ export default function SickNotePage() {
   const [hpcsa, setHpcsa] = useState("");
   const [practiceNumber, setPracticeNumber] = useState("");
   const [practiceAddress, setPracticeAddress] = useState("");
+  const [doctorQualifications, setDoctorQualifications] = useState("");
 
   const [dateSeen, setDateSeen] = useState(today());
   const [unfitFrom, setUnfitFrom] = useState(today());
@@ -127,22 +133,75 @@ export default function SickNotePage() {
   }
 
   async function loadDoctor() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    setMessage("");
 
-    const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
-    const profile = data as DoctorProfile | null;
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-    if (profile) {
-      const name = `${profile.first_name || ""} ${profile.last_name || profile.surname || ""}`.trim();
-      setDoctorProfile(profile);
-      if (name) setDoctorName(name.startsWith("Dr") ? name : `Dr ${name}`);
-      setDoctorEmail(profile.email || user.email || "");
-      setDoctorMobile(profile.mobile || "");
-      setHpcsa(profile.registration_number || profile.hpcsa || "");
-      setPracticeNumber(profile.practice_number || "");
-      setPracticeAddress(profile.practice_address || "");
+    if (userError || !user) {
+      setMessage("Could not load the logged-in doctor.");
+      return;
     }
+
+    /*
+      Some CareScriber projects link profiles to auth.users using `id`,
+      while others use `user_id`. Try both without breaking either setup.
+    */
+    let profile: DoctorProfile | null = null;
+
+    const byId = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (!byId.error && byId.data) {
+      profile = byId.data as DoctorProfile;
+    }
+
+    if (!profile) {
+      const byUserId = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!byUserId.error && byUserId.data) {
+        profile = byUserId.data as DoctorProfile;
+      }
+    }
+
+    if (!profile) {
+      setDoctorProfile({ id: user.id, email: user.email || "" });
+      setDoctorEmail(user.email || "");
+      setMessage(
+        "Your doctor profile could not be found. Please update the profiles table with your doctor details.",
+      );
+      return;
+    }
+
+    const firstName = profile.first_name?.trim() || "";
+    const surname = (profile.last_name || profile.surname || "").trim();
+    const rawName = `${firstName} ${surname}`.trim();
+    const formattedName = rawName
+      ? /^dr\.?\s/i.test(rawName)
+        ? rawName
+        : `Dr ${rawName}`
+      : "";
+
+    setDoctorProfile({
+      ...profile,
+      id: profile.id || user.id,
+    });
+    setDoctorName(formattedName);
+    setDoctorEmail(profile.email || user.email || "");
+    setDoctorMobile(profile.mobile || profile.phone || "");
+    setHpcsa(profile.registration_number || profile.hpcsa || "");
+    setPracticeNumber(profile.practice_number || "");
+    setPracticeAddress(profile.practice_address || profile.address || "");
+    setDoctorQualifications(profile.qualifications || profile.qualification || "");
   }
 
   const filteredPatients = useMemo(() => {
@@ -266,66 +325,154 @@ export default function SickNotePage() {
   }
 
   function buildPdf() {
-    const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
-    const width = doc.internal.pageSize.getWidth();
+    const doc = new jsPDF({
+      unit: "mm",
+      format: "a4",
+      compress: true,
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 18;
-    const contentWidth = width - margin * 2;
+    const contentWidth = pageWidth - margin * 2;
     const signature = signatureDataUrl();
     const diagnosis = diagnosisParts();
 
+    // Header
     doc.setFillColor(37, 99, 235);
-    doc.rect(0, 0, width, 34, "F");
+    doc.rect(0, 0, pageWidth, 34, "F");
+
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(20);
     doc.text("CareScriber Medical Certificate", margin, 17);
+
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.text(`Certificate No: ${certificateNumber}`, margin, 25);
-    doc.text(`Issued: ${new Date().toLocaleString("en-ZA")}`, width - margin, 25, { align: "right" });
+    doc.text(
+      `Issued: ${new Date().toLocaleString("en-ZA")}`,
+      pageWidth - margin,
+      25,
+      { align: "right" },
+    );
 
+    // Certificate text
     doc.setTextColor(15, 23, 42);
-    let y = 46;
+    doc.setFont("helvetica", "normal");
     doc.setFontSize(11);
+
+    let y = 46;
+
     const paragraphs = [
       `This is to certify that ${patientName} (ID / Passport: ${patientId}) was examined by me on ${dateSeen}.`,
       `In my clinical opinion, the patient is unfit for work or school from ${unfitFrom} up to and including ${unfitUntil}.`,
       `The patient may return to work or school on ${returnDate}, subject to clinical recovery.`,
     ];
+
     for (const paragraph of paragraphs) {
       const lines = doc.splitTextToSize(paragraph, contentWidth);
       doc.text(lines, margin, y);
       y += lines.length * 6 + 5;
     }
 
+    // Clinical information box.
+    // Draw the white/light fill and border separately to avoid Android PDF
+    // viewers rendering an "FD" rounded rectangle as a solid black block.
+    const clinicalDiagnosis = `Diagnosis / ICD-10: ${
+      diagnosis.code ? `${diagnosis.code} — ` : ""
+    }${diagnosis.description}`;
+
+    const diagnosisLines = doc.splitTextToSize(
+      clinicalDiagnosis,
+      contentWidth - 10,
+    );
+    const commentLines = doc.splitTextToSize(
+      `Comments: ${comments || "None"}`,
+      contentWidth - 10,
+    );
+    const clinicalHeight = Math.max(
+      35,
+      17 + diagnosisLines.length * 5 + commentLines.length * 5 + 8,
+    );
+
     doc.setFillColor(248, 250, 252);
+    doc.roundedRect(margin, y, contentWidth, clinicalHeight, 3, 3, "F");
     doc.setDrawColor(203, 213, 225);
-    doc.roundedRect(margin, y, contentWidth, 35, 3, 3, "FD");
+    doc.setLineWidth(0.35);
+    doc.roundedRect(margin, y, contentWidth, clinicalHeight, 3, 3, "S");
+
+    doc.setTextColor(15, 23, 42);
     doc.setFont("helvetica", "bold");
     doc.text("CLINICAL INFORMATION", margin + 5, y + 8);
-    doc.setFont("helvetica", "normal");
-    doc.text(doc.splitTextToSize(`Diagnosis / ICD-10: ${diagnosis.code ? `${diagnosis.code} — ` : ""}${diagnosis.description}`, contentWidth - 10), margin + 5, y + 16);
-    doc.text(doc.splitTextToSize(`Comments: ${comments || "None"}`, contentWidth - 10), margin + 5, y + 27);
-    y += 44;
 
-    doc.roundedRect(margin, y, contentWidth, 48, 3, 3, "FD");
+    doc.setFont("helvetica", "normal");
+    doc.text(diagnosisLines, margin + 5, y + 16);
+    doc.text(
+      commentLines,
+      margin + 5,
+      y + 16 + diagnosisLines.length * 5 + 5,
+    );
+
+    y += clinicalHeight + 9;
+
+    // Medical practitioner box
+    const doctorRows = [
+      `Doctor: ${doctorName}`,
+      doctorQualifications
+        ? `Qualifications: ${doctorQualifications}`
+        : "",
+      `HPCSA / Registration: ${hpcsa}`,
+      `Practice number: ${practiceNumber}`,
+      doctorMobile ? `Mobile: ${doctorMobile}` : "",
+      `Email: ${doctorEmail}`,
+      `Practice address: ${practiceAddress}`,
+    ].filter(Boolean);
+
+    const doctorLineGroups = doctorRows.map((row) =>
+      doc.splitTextToSize(row, contentWidth - 10),
+    );
+    const doctorTextHeight =
+      doctorLineGroups.reduce((total, lines) => total + lines.length * 5, 0) +
+      16;
+    const doctorBoxHeight = Math.max(48, doctorTextHeight + 4);
+
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(margin, y, contentWidth, doctorBoxHeight, 3, 3, "F");
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.35);
+    doc.roundedRect(margin, y, contentWidth, doctorBoxHeight, 3, 3, "S");
+
+    doc.setTextColor(15, 23, 42);
     doc.setFont("helvetica", "bold");
     doc.text("MEDICAL PRACTITIONER", margin + 5, y + 8);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Doctor: ${doctorName}`, margin + 5, y + 16);
-    doc.text(`HPCSA / Registration: ${hpcsa}`, margin + 5, y + 23);
-    doc.text(`Practice number: ${practiceNumber}`, margin + 5, y + 30);
-    doc.text(`Email: ${doctorEmail}`, margin + 5, y + 37);
-    doc.text(doc.splitTextToSize(`Practice address: ${practiceAddress}`, contentWidth - 10), margin + 5, y + 44);
-    y += 56;
 
-    if (signature) {
-      doc.addImage(signature, "PNG", margin, y, 55, 20);
-      doc.line(margin, y + 22, margin + 62, y + 22);
-      doc.setFontSize(9);
-      doc.text("Doctor signature", margin, y + 27);
+    doc.setFont("helvetica", "normal");
+    let doctorY = y + 16;
+
+    for (const lines of doctorLineGroups) {
+      doc.text(lines, margin + 5, doctorY);
+      doctorY += lines.length * 5;
     }
 
+    y += doctorBoxHeight + 8;
+
+    // Signature
+    if (signature) {
+      const availableSignatureSpace = pageHeight - y - 30;
+      const signatureHeight = Math.min(20, Math.max(14, availableSignatureSpace));
+
+      doc.addImage(signature, "PNG", margin, y, 55, signatureHeight);
+      doc.setDrawColor(100, 116, 139);
+      doc.line(margin, y + signatureHeight + 2, margin + 62, y + signatureHeight + 2);
+
+      doc.setFontSize(9);
+      doc.setTextColor(15, 23, 42);
+      doc.text("Doctor signature", margin, y + signatureHeight + 7);
+    }
+
+    // Footer
+    doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
     doc.text(
@@ -334,14 +481,22 @@ export default function SickNotePage() {
         contentWidth,
       ),
       margin,
-      282,
+      pageHeight - 12,
     );
 
+    doc.text("1 / 1", pageWidth - margin, pageHeight - 8, {
+      align: "right",
+    });
+
     const dataUri = doc.output("datauristring");
+
     return {
       doc,
       base64: dataUri.substring(dataUri.indexOf(",") + 1),
-      filename: `${certificateNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
+      filename: `${certificateNumber.replace(
+        /[^a-zA-Z0-9_-]/g,
+        "_",
+      )}.pdf`,
     };
   }
 
@@ -370,6 +525,7 @@ export default function SickNotePage() {
       return_to_work: returnDate,
       comments: comments.trim() || null,
       doctor_name: doctorName.trim(),
+      doctor_qualifications: doctorQualifications.trim() || null,
       doctor_email: doctorEmail.trim(),
       doctor_mobile: doctorMobile.trim() || null,
       doctor_hpcsa: hpcsa.trim(),
@@ -505,6 +661,7 @@ export default function SickNotePage() {
 
         <h2 style={styles.heading}>Doctor Details</h2>
         <input style={styles.input} placeholder="Doctor name" value={doctorName} readOnly />
+        <input style={styles.input} placeholder="Qualifications" value={doctorQualifications} readOnly />
         <input style={styles.input} placeholder="Doctor email" value={doctorEmail} readOnly />
         <input style={styles.input} placeholder="Doctor mobile" value={doctorMobile} readOnly />
         <input style={styles.input} placeholder="HPCSA / registration number" value={hpcsa} readOnly />
@@ -537,6 +694,7 @@ export default function SickNotePage() {
           <p>Diagnosis: <strong>{selectedDiagnosis || diagnosisSearch || "[ICD-10 diagnosis]"}</strong></p>
           <p>Comments: {comments || "None"}</p>
           <p>Doctor: {doctorName}</p>
+          {doctorQualifications && <p>Qualifications: {doctorQualifications}</p>}
           <p>HPCSA / Registration: {hpcsa || "Not captured"}</p>
           <p>Practice No: {practiceNumber || "Not captured"}</p>
         </div>
