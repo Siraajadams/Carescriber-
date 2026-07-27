@@ -15,6 +15,8 @@ export default function RegisterDoctorPage() {
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
   const [registrationNumber, setRegistrationNumber] = useState("");
+  const [qualifications, setQualifications] = useState("");
+  const [speciality, setSpeciality] = useState("General Practitioner");
   const [practiceNumber, setPracticeNumber] = useState("");
   const [practiceAddress, setPracticeAddress] = useState("");
   const [country, setCountry] = useState("South Africa");
@@ -55,6 +57,8 @@ export default function RegisterDoctorPage() {
     const cleanEmail = email.trim().toLowerCase();
     const cleanMobile = normaliseMobile(mobile);
     const cleanRegistrationNumber = registrationNumber.trim();
+    const cleanQualifications = qualifications.trim();
+    const cleanSpeciality = speciality.trim();
     const cleanPracticeNumber = practiceNumber.trim();
     const cleanPracticeAddress = practiceAddress.trim();
     const cleanPassword = password.trim();
@@ -66,6 +70,8 @@ export default function RegisterDoctorPage() {
       !cleanEmail ||
       !cleanMobile ||
       !cleanRegistrationNumber ||
+      !cleanQualifications ||
+      !cleanPracticeNumber ||
       !cleanPassword ||
       !cleanConfirmPassword
     ) {
@@ -108,7 +114,8 @@ export default function RegisterDoctorPage() {
 
               // Keep this field name aligned with the profiles table.
               registration_number: cleanRegistrationNumber,
-
+              doctor_qualifications: cleanQualifications,
+              speciality: cleanSpeciality || "General Practitioner",
               practice_number: cleanPracticeNumber,
               practice_address: cleanPracticeAddress,
               country,
@@ -147,6 +154,8 @@ export default function RegisterDoctorPage() {
             email: cleanEmail,
             mobile: cleanMobile,
             registration_number: cleanRegistrationNumber,
+            doctor_qualifications: cleanQualifications,
+            speciality: cleanSpeciality || "General Practitioner",
             practice_number: cleanPracticeNumber,
             practice_address: cleanPracticeAddress,
             country,
@@ -181,6 +190,8 @@ export default function RegisterDoctorPage() {
             email,
             mobile,
             registration_number,
+            doctor_qualifications,
+            speciality,
             practice_number,
             practice_address,
             country,
@@ -339,7 +350,32 @@ export default function RegisterDoctorPage() {
           </label>
 
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Practice number</span>
+            <span style={styles.fieldLabel}>Qualifications *</span>
+
+            <input
+              style={styles.input}
+              placeholder="Example: MBChB, MMed, FCFP"
+              value={qualifications}
+              onChange={(e) => setQualifications(e.target.value)}
+              disabled={loading}
+              required
+            />
+          </label>
+
+          <label style={styles.field}>
+            <span style={styles.fieldLabel}>Speciality</span>
+
+            <input
+              style={styles.input}
+              placeholder="Example: General Practitioner"
+              value={speciality}
+              onChange={(e) => setSpeciality(e.target.value)}
+              disabled={loading}
+            />
+          </label>
+
+          <label style={styles.field}>
+            <span style={styles.fieldLabel}>Practice number *</span>
 
             <input
               style={styles.input}
@@ -347,6 +383,7 @@ export default function RegisterDoctorPage() {
               value={practiceNumber}
               onChange={(e) => setPracticeNumber(e.target.value)}
               disabled={loading}
+              required
             />
           </label>
 
