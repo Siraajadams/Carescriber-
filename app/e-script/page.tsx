@@ -239,6 +239,8 @@ export default function EScriptPage() {
   const [scriptNumber, setScriptNumber] = useState(`RX-${Date.now()}`);
   const [history, setHistory] = useState<any[]>([]);
   const [emailing, setEmailing] = useState(false);
+  const [savingPrescription, setSavingPrescription] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -331,6 +333,7 @@ export default function EScriptPage() {
           patient.surname || patient.last_name || ""
         }`.trim()
       );
+      setRecipientEmail(patient.email || "");
 
       if (typeof window !== "undefined") {
         window.sessionStorage.setItem(
@@ -540,6 +543,7 @@ export default function EScriptPage() {
   function selectPatient(p: Patient) {
     setSelectedPatient(p);
     setPatientSearch(patientName(p));
+    setRecipientEmail(p.email || "");
     setMessage("");
 
     if (typeof window !== "undefined") {
@@ -553,6 +557,7 @@ export default function EScriptPage() {
   function clearSelectedPatient() {
     setSelectedPatient(null);
     setPatientSearch("");
+    setRecipientEmail("");
 
     if (typeof window !== "undefined") {
       window.sessionStorage.removeItem(
@@ -891,36 +896,97 @@ export default function EScriptPage() {
     }
   }
 
-  async function savePrescription() {
-    setMessage("");
+  async function persistPrescription(options?: {
+    silent?: boolean;
+  }): Promise<boolean> {
     if (!selectedPatient) {
       setMessage("Please select a patient first.");
-      return;
-    }
-    const validItems = items.filter((i) => i.medicine || i.medicineQuery);
-    if (validItems.length === 0) {
-      setMessage("Please add at least one medicine.");
-      return;
+      return false;
     }
 
-    const { error } = await supabase.from("prescriptions").insert({
+    const validItems = items.filter(
+      (item) => item.medicine || item.medicineQuery.trim()
+    );
+
+    if (validItems.length === 0) {
+      setMessage("Please add at least one medicine.");
+      return false;
+    }
+
+    if (!doctorName.trim() || doctorName.trim().toLowerCase() === "dr") {
+      setMessage("Please complete the doctor's full name.");
+      return false;
+    }
+
+    if (!hpcsa.trim()) {
+      setMessage("Please complete the HPCSA / council number.");
+      return false;
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setMessage(
+        userError
+          ? "Doctor login error: " + userError.message
+          : "No logged-in doctor was found."
+      );
+      return false;
+    }
+
+    const payload = {
       prescription_number: scriptNumber,
       patient_id: selectedPatient.id,
       patient_name: patientName(),
+      doctor_id: user.id,
       doctor_name: doctorName,
       doctor_hpcsa: hpcsa,
       items: validItems,
       status: "issued",
       pdf_html: buildPdfHtml(),
       issued_at: new Date().toISOString(),
-    });
+    };
+
+    const { error } = await supabase
+      .from("prescriptions")
+      .upsert(payload, {
+        onConflict: "prescription_number",
+      });
 
     if (error) {
-      setMessage("Prescription generated but save failed: " + error.message);
-      return;
+      setMessage("Prescription save failed: " + error.message);
+      return false;
     }
-    setMessage("Prescription saved.");
-    loadHistory();
+
+    if (!options?.silent) {
+      setMessage("Prescription saved successfully.");
+    }
+
+    await loadHistory();
+    return true;
+  }
+
+  async function savePrescription() {
+    if (savingPrescription) return;
+
+    setSavingPrescription(true);
+    setMessage("");
+
+    try {
+      await persistPrescription();
+    } catch (error) {
+      console.error("Unexpected prescription save error:", error);
+      setMessage(
+        error instanceof Error
+          ? "Prescription save failed: " + error.message
+          : "An unexpected prescription save error occurred."
+      );
+    } finally {
+      setSavingPrescription(false);
+    }
   }
 
   async function emailPrescription() {
@@ -931,14 +997,10 @@ export default function EScriptPage() {
       return;
     }
 
-    const suggestedEmail = selectedPatient.email || "";
-    const recipient = window.prompt(
-      "Enter the email address that should receive the prescription:",
-      suggestedEmail
-    );
+    const recipient = recipientEmail.trim().toLowerCase();
 
-    if (!recipient?.trim()) {
-      setMessage("Email cancelled because no recipient address was entered.");
+    if (!recipient || !recipient.includes("@")) {
+      setMessage("Please enter a valid recipient email address.");
       return;
     }
 
@@ -946,6 +1008,12 @@ export default function EScriptPage() {
     setMessage("");
 
     try {
+      const saved = await persistPrescription({ silent: true });
+
+      if (!saved) {
+        return;
+      }
+
       const pdfBlob = generatePrescriptionPdfBlob();
       const pdfBase64 = await blobToBase64(pdfBlob);
 
@@ -955,26 +1023,46 @@ export default function EScriptPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          to: recipient.trim(),
-          subject: `Prescription ${scriptNumber} - ${patientName()}`,
+          to: recipient,
+          subject: `Electronic Prescription ${scriptNumber} - ${patientName()}`,
           body: `Good day,
 
-Please find prescription ${scriptNumber} for ${patientName()} attached.
+Please find the electronic prescription ${scriptNumber} for ${patientName()} attached.
+
+Prescriber: ${doctorName}
+HPCSA / Council number: ${hpcsa}
+
+This prescription was generated securely using CareScriber.
 
 Kind regards,
-${doctorName}`,
+CareScriber
+https://carescriber.com`,
           filename: `${scriptNumber}.pdf`,
           pdfBase64,
+          prescriptionNumber: scriptNumber,
+          patientId: selectedPatient.id,
         }),
       });
 
       const result = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(result?.error || "The prescription email could not be sent.");
+        throw new Error(
+          result?.error || "The prescription email could not be sent."
+        );
       }
 
-      setMessage(`Prescription PDF emailed successfully to ${recipient.trim()}.`);
+      await supabase
+        .from("prescriptions")
+        .update({
+          status: "emailed",
+        })
+        .eq("prescription_number", scriptNumber);
+
+      setMessage(
+        `Prescription saved and PDF emailed successfully to ${recipient}.`
+      );
+      await loadHistory();
     } catch (error) {
       console.error("Prescription email error:", error);
       setMessage(
@@ -1153,14 +1241,37 @@ ${doctorName}`,
             <textarea style={styles.textareaSmall} value={item.notes} onChange={(e) => updateItem(item.id, { notes: e.target.value })} placeholder="Notes / counselling instructions" />
           </div>
         ))}
-        <button style={styles.lightButton} onClick={addItem}>+ Add Medicine</button>
+        <button type="button" style={styles.lightButton} onClick={addItem}>+ Add Medicine</button>
 
         <h2 style={styles.heading}>Doctor Signature</h2>
         <canvas ref={canvasRef} width={700} height={220} style={styles.canvas} onMouseDown={startDraw} onMouseMove={draw} onMouseUp={stopDraw} onMouseLeave={stopDraw} onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={stopDraw} />
-        <button style={styles.lightButton} onClick={clearSignature}>Clear Signature</button>
+        <button type="button" style={styles.lightButton} onClick={clearSignature}>Clear Signature</button>
+
+        <h2 style={styles.heading}>Send Prescription</h2>
+        <label style={styles.fieldLabel}>
+          Recipient email
+          <input
+            style={styles.input}
+            type="email"
+            inputMode="email"
+            value={recipientEmail}
+            onChange={(e) => setRecipientEmail(e.target.value)}
+            placeholder="patient@example.com"
+          />
+        </label>
 
         {message && <div style={styles.message}>{message}</div>}
-        <button style={styles.primaryButton} onClick={savePrescription}>Save Prescription</button>
+
+        <button
+          style={{
+            ...styles.primaryButton,
+            ...(savingPrescription ? styles.disabledButton : {}),
+          }}
+          onClick={savePrescription}
+          disabled={savingPrescription}
+        >
+          {savingPrescription ? "Saving Prescription..." : "Save Prescription"}
+        </button>
         <button style={styles.pdfButton} onClick={printPdf}>Download / Print PDF</button>
         <button
           style={{
@@ -1175,7 +1286,21 @@ ${doctorName}`,
 
         <h2 style={styles.heading}>Prescription History</h2>
         {history.length === 0 && <p style={styles.muted}>No saved prescription history yet.</p>}
-        {history.map((h) => <div key={h.id || h.prescription_number} style={styles.historyRow}><b>{h.prescription_number || "Prescription"}</b><span>{h.patient_name || "Patient"} · {h.created_at ? new Date(h.created_at).toLocaleDateString() : ""}</span></div>)}
+        {history.map((h) => (
+          <div
+            key={h.id || h.prescription_number}
+            style={styles.historyRow}
+          >
+            <b>{h.prescription_number || "Prescription"}</b>
+            <span>
+              {h.patient_name || "Patient"} ·{" "}
+              {h.created_at
+                ? new Date(h.created_at).toLocaleDateString("en-ZA")
+                : ""}
+            </span>
+            <span>Status: {h.status || "issued"}</span>
+          </div>
+        ))}
       </section>
     </main>
   );
