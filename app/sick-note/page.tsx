@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 
 type Patient = {
@@ -21,6 +22,7 @@ type DoctorProfile = {
   id?: string;
   first_name?: string;
   surname?: string;
+  last_name?: string;
   email?: string;
   mobile?: string;
   hpcsa?: string;
@@ -89,7 +91,10 @@ export default function SickNotePage() {
   const [patientEmail, setPatientEmail] = useState("");
   const [employerEmail, setEmployerEmail] = useState("");
 
-  const [doctorName, setDoctorName] = useState("Dr");
+  const [doctorProfile, setDoctorProfile] = useState<DoctorProfile | null>(null);
+  const [doctorName, setDoctorName] = useState("");
+  const [doctorEmail, setDoctorEmail] = useState("");
+  const [doctorMobile, setDoctorMobile] = useState("");
   const [hpcsa, setHpcsa] = useState("");
   const [practiceNumber, setPracticeNumber] = useState("");
   const [practiceAddress, setPracticeAddress] = useState("");
@@ -103,6 +108,9 @@ export default function SickNotePage() {
   const [comments, setComments] = useState("");
   const [message, setMessage] = useState("");
   const [certificateNumber, setCertificateNumber] = useState(`CS-${Date.now()}`);
+  const [saving, setSaving] = useState(false);
+  const [emailing, setEmailing] = useState(false);
+  const [hasSignature, setHasSignature] = useState(false);
 
   useEffect(() => {
     loadPatients();
@@ -126,9 +134,12 @@ export default function SickNotePage() {
     const profile = data as DoctorProfile | null;
 
     if (profile) {
-      const name = `${profile.first_name || ""} ${profile.surname || ""}`.trim();
+      const name = `${profile.first_name || ""} ${profile.last_name || profile.surname || ""}`.trim();
+      setDoctorProfile(profile);
       if (name) setDoctorName(name.startsWith("Dr") ? name : `Dr ${name}`);
-      setHpcsa(profile.hpcsa || profile.registration_number || "");
+      setDoctorEmail(profile.email || user.email || "");
+      setDoctorMobile(profile.mobile || "");
+      setHpcsa(profile.registration_number || profile.hpcsa || "");
       setPracticeNumber(profile.practice_number || "");
       setPracticeAddress(profile.practice_address || "");
     }
@@ -201,6 +212,7 @@ export default function SickNotePage() {
     ctx.strokeStyle = "#0f172a";
     ctx.lineTo(point.x, point.y);
     ctx.stroke();
+    setHasSignature(true);
   }
 
   function stopDraw() {
@@ -213,85 +225,244 @@ export default function SickNotePage() {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasSignature(false);
   }
 
   function signatureDataUrl() {
-    return canvasRef.current?.toDataURL("image/png") || "";
+    return hasSignature ? canvasRef.current?.toDataURL("image/png") || "" : "";
   }
 
-  function certificateHtml() {
-    const signature = signatureDataUrl();
-    const diagnosis = selectedDiagnosis || diagnosisSearch || "Not specified";
-    return `
-      <html><head><title>CareScriber Medical Certificate</title>
-      <style>
-        body { font-family: Arial, sans-serif; color: #0f172a; padding: 36px; line-height: 1.55; }
-        .header { border-bottom: 2px solid #1d4ed8; padding-bottom: 16px; margin-bottom: 24px; }
-        h1 { color: #1d4ed8; margin: 0; font-size: 28px; }
-        .small { color: #475569; font-size: 13px; }
-        .box { border: 1px solid #cbd5e1; border-radius: 12px; padding: 18px; margin: 18px 0; }
-        .row { margin: 8px 0; }
-        .label { font-weight: bold; }
-        .signature { margin-top: 30px; }
-        img { max-width: 240px; border-bottom: 1px solid #0f172a; }
-        .footer { margin-top: 30px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 12px; }
-      </style></head><body>
-        <div class="header"><h1>CareScriber Medical Certificate</h1><div class="small">Certificate No: ${escapeHtml(certificateNumber)}</div><div class="small">Issued: ${new Date().toLocaleString()}</div></div>
-        <div class="box"><div class="row"><span class="label">Patient:</span> ${escapeHtml(patientName || "Not captured")}</div><div class="row"><span class="label">ID / Passport:</span> ${escapeHtml(patientId || "Not captured")}</div></div>
-        <p>This is to certify that <strong>${escapeHtml(patientName || "[Patient Name]")}</strong> was examined by me on <strong>${escapeHtml(dateSeen)}</strong>.</p>
-        <p>In my clinical opinion, the patient is unfit for work/school from <strong>${escapeHtml(unfitFrom || "[date]")}</strong> up to and including <strong>${escapeHtml(unfitUntil || "[date]")}</strong>.</p>
-        <p>The patient may return to work/school on <strong>${escapeHtml(returnDate || "[date]")}</strong>, subject to clinical recovery.</p>
-        <div class="box"><div class="row"><span class="label">ICD-10 / Diagnosis:</span> ${escapeHtml(diagnosis)}</div><div class="row"><span class="label">Comments:</span> ${escapeHtml(comments || "None")}</div></div>
-        <div class="box"><div class="row"><span class="label">Doctor:</span> ${escapeHtml(doctorName || "Dr")}</div><div class="row"><span class="label">HPCSA / Registration:</span> ${escapeHtml(hpcsa || "Not captured")}</div><div class="row"><span class="label">Practice Number:</span> ${escapeHtml(practiceNumber || "Not captured")}</div><div class="row"><span class="label">Practice Address:</span> ${escapeHtml(practiceAddress || "Not captured")}</div></div>
-        <div class="signature">${signature ? `<img src="${signature}" />` : "<p>Signature not captured</p>"}<p><strong>Doctor Signature</strong></p></div>
-        <div class="footer">This certificate was generated electronically through CareScriber. Employer verification should confirm certificate number, doctor details and issue date only. Clinical details remain confidential.</div>
-      </body></html>`;
+  function diagnosisParts() {
+    const value = (selectedDiagnosis || diagnosisSearch).trim();
+    if (!value.includes("|")) return { code: "", description: value };
+    const [code, ...description] = value.split("|");
+    return { code: code.trim(), description: description.join("|").trim() };
   }
 
-  function printPdf() {
-    const ok = downloadHtmlFile(`${certificateNumber}.html`, certificateHtml());
-    if (ok) {
-      setMessage("Sick note file downloaded. Open it from Downloads/Files and use Share or Print to save as PDF on iPhone.");
-    } else {
-      setMessage("Could not create sick note file. Please try Safari/Chrome or update iOS browser settings.");
+  function validateCertificate(requireEmployer = false) {
+    const missing: string[] = [];
+    if (!patientName.trim()) missing.push("Patient full name");
+    if (!patientId.trim()) missing.push("Patient ID / passport number");
+    if (!diagnosisParts().description) missing.push("Diagnosis / ICD-10");
+    if (!doctorProfile?.id) missing.push("Logged-in doctor profile");
+    if (!doctorName.trim()) missing.push("Doctor name");
+    if (!doctorEmail.trim()) missing.push("Doctor email");
+    if (!hpcsa.trim()) missing.push("HPCSA registration number");
+    if (!practiceNumber.trim()) missing.push("Practice number");
+    if (!practiceAddress.trim()) missing.push("Practice address");
+    if (!hasSignature) missing.push("Doctor signature");
+    if (requireEmployer && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(employerEmail.trim())) {
+      missing.push("Valid employer email");
     }
+    if (patientEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(patientEmail.trim())) {
+      missing.push("Valid patient email, or leave it blank");
+    }
+    if (unfitUntil < unfitFrom) missing.push("Valid medical-leave date range");
+    return missing;
   }
 
-  async function saveCertificate() {
-    setMessage("");
-    if (!patientName || !patientId) return setMessage("Please capture patient name and ID number.");
-    if (!selectedDiagnosis && !diagnosisSearch) return setMessage("Please select or enter diagnosis.");
+  function showMissing(missing: string[]) {
+    setMessage(`Please complete the following:\n• ${missing.join("\n• ")}`);
+  }
 
-    const diagnosisText = selectedDiagnosis || diagnosisSearch;
-    const code = diagnosisText.includes("|") ? diagnosisText.split("|")[0].trim() : "";
-    const desc = diagnosisText.includes("|") ? diagnosisText.split("|")[1].trim() : diagnosisText;
+  function buildPdf() {
+    const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
+    const width = doc.internal.pageSize.getWidth();
+    const margin = 18;
+    const contentWidth = width - margin * 2;
+    const signature = signatureDataUrl();
+    const diagnosis = diagnosisParts();
 
-    const { error } = await supabase.from("medical_certificates").insert({
+    doc.setFillColor(37, 99, 235);
+    doc.rect(0, 0, width, 34, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(20);
+    doc.text("CareScriber Medical Certificate", margin, 17);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`Certificate No: ${certificateNumber}`, margin, 25);
+    doc.text(`Issued: ${new Date().toLocaleString("en-ZA")}`, width - margin, 25, { align: "right" });
+
+    doc.setTextColor(15, 23, 42);
+    let y = 46;
+    doc.setFontSize(11);
+    const paragraphs = [
+      `This is to certify that ${patientName} (ID / Passport: ${patientId}) was examined by me on ${dateSeen}.`,
+      `In my clinical opinion, the patient is unfit for work or school from ${unfitFrom} up to and including ${unfitUntil}.`,
+      `The patient may return to work or school on ${returnDate}, subject to clinical recovery.`,
+    ];
+    for (const paragraph of paragraphs) {
+      const lines = doc.splitTextToSize(paragraph, contentWidth);
+      doc.text(lines, margin, y);
+      y += lines.length * 6 + 5;
+    }
+
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(margin, y, contentWidth, 35, 3, 3, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.text("CLINICAL INFORMATION", margin + 5, y + 8);
+    doc.setFont("helvetica", "normal");
+    doc.text(doc.splitTextToSize(`Diagnosis / ICD-10: ${diagnosis.code ? `${diagnosis.code} — ` : ""}${diagnosis.description}`, contentWidth - 10), margin + 5, y + 16);
+    doc.text(doc.splitTextToSize(`Comments: ${comments || "None"}`, contentWidth - 10), margin + 5, y + 27);
+    y += 44;
+
+    doc.roundedRect(margin, y, contentWidth, 48, 3, 3, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.text("MEDICAL PRACTITIONER", margin + 5, y + 8);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Doctor: ${doctorName}`, margin + 5, y + 16);
+    doc.text(`HPCSA / Registration: ${hpcsa}`, margin + 5, y + 23);
+    doc.text(`Practice number: ${practiceNumber}`, margin + 5, y + 30);
+    doc.text(`Email: ${doctorEmail}`, margin + 5, y + 37);
+    doc.text(doc.splitTextToSize(`Practice address: ${practiceAddress}`, contentWidth - 10), margin + 5, y + 44);
+    y += 56;
+
+    if (signature) {
+      doc.addImage(signature, "PNG", margin, y, 55, 20);
+      doc.line(margin, y + 22, margin + 62, y + 22);
+      doc.setFontSize(9);
+      doc.text("Doctor signature", margin, y + 27);
+    }
+
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      doc.splitTextToSize(
+        "Generated electronically through CareScriber. Clinical information is confidential and must be handled securely.",
+        contentWidth,
+      ),
+      margin,
+      282,
+    );
+
+    const dataUri = doc.output("datauristring");
+    return {
+      doc,
+      base64: dataUri.substring(dataUri.indexOf(",") + 1),
+      filename: `${certificateNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
+    };
+  }
+
+  async function saveCertificate(options?: { emailed?: boolean; resendId?: string | null }) {
+    const missing = validateCertificate(false);
+    if (missing.length) {
+      showMissing(missing);
+      return null;
+    }
+    if (!doctorProfile?.id) return null;
+
+    const diagnosis = diagnosisParts();
+    const payload = {
       certificate_number: certificateNumber,
+      doctor_id: doctorProfile.id,
       patient_id: selectedPatient?.id || null,
-      employer_email: employerEmail,
-      patient_email: patientEmail,
-      diagnosis_code: code,
-      diagnosis_description: desc,
+      patient_name: patientName.trim(),
+      patient_id_number: patientId.trim(),
+      employer_email: employerEmail.trim() || null,
+      patient_email: patientEmail.trim() || null,
+      diagnosis_code: diagnosis.code || null,
+      diagnosis_description: diagnosis.description,
       date_seen: dateSeen,
       unfit_from: unfitFrom,
       unfit_until: unfitUntil,
       return_to_work: returnDate,
-      comments,
+      comments: comments.trim() || null,
+      doctor_name: doctorName.trim(),
+      doctor_email: doctorEmail.trim(),
+      doctor_mobile: doctorMobile.trim() || null,
+      doctor_hpcsa: hpcsa.trim(),
+      doctor_practice_number: practiceNumber.trim(),
+      doctor_practice_address: practiceAddress.trim(),
       doctor_signature: signatureDataUrl(),
       pdf_generated: true,
-      emailed_to_employer: false,
-    });
+      emailed_to_employer: Boolean(options?.emailed),
+      emailed_at: options?.emailed ? new Date().toISOString() : null,
+      resend_email_id: options?.resendId || null,
+      status: options?.emailed ? "emailed" : "saved",
+    };
 
-    if (error) return setMessage("Save failed: " + error.message);
-    setMessage("Sick note saved successfully.");
+    const { data, error } = await supabase
+      .from("medical_certificates")
+      .upsert(payload, { onConflict: "certificate_number" })
+      .select("id, certificate_number")
+      .single();
+
+    if (error) {
+      setMessage(`Save failed: ${error.message}`);
+      return null;
+    }
+    return data;
   }
 
-  function emailPdf() {
-    const diagnosisText = selectedDiagnosis || diagnosisSearch || "Not specified";
-    const subject = encodeURIComponent(`Medical Certificate - ${patientName}`);
-    const body = encodeURIComponent(`Good day,\n\nPlease find the medical certificate details below.\n\nPatient: ${patientName}\nID Number: ${patientId}\nDate seen: ${dateSeen}\nUnfit from: ${unfitFrom}\nUntil: ${unfitUntil}\nReturn date: ${returnDate}\n\nDiagnosis / ICD-10: ${diagnosisText}\nComments: ${comments || "None"}\n\nDoctor: ${doctorName}\nHPCSA / Registration: ${hpcsa || "Not captured"}\nPractice Number: ${practiceNumber || "Not captured"}\n\nCertificate Number: ${certificateNumber}\n\nPlease note: The doctor should export/print the certificate PDF and attach it to this email before sending.\n\nKind regards,\n${doctorName}`);
-    window.location.href = `mailto:${employerEmail}?cc=${patientEmail}&subject=${subject}&body=${body}`;
+  async function handleSave() {
+    setSaving(true);
+    setMessage("");
+    try {
+      const saved = await saveCertificate();
+      if (saved) setMessage(`Sick note ${certificateNumber} saved successfully.`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function printPdf() {
+    const missing = validateCertificate(false);
+    if (missing.length) return showMissing(missing);
+    const pdf = buildPdf();
+    pdf.doc.save(pdf.filename);
+    setMessage("Medical certificate PDF downloaded successfully.");
+  }
+
+  async function emailPdf() {
+    setEmailing(true);
+    setMessage("");
+    try {
+      const missing = validateCertificate(true);
+      if (missing.length) return showMissing(missing);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        setMessage("Your session has expired. Please sign in again.");
+        return;
+      }
+
+      const pdf = buildPdf();
+      const response = await fetch("/api/sick-note/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          to: employerEmail.trim(),
+          cc: patientEmail.trim() || undefined,
+          patientName: patientName.trim(),
+          certificateNumber,
+          doctorName: doctorName.trim(),
+          dateSeen,
+          unfitFrom,
+          unfitUntil,
+          returnDate,
+          filename: pdf.filename,
+          pdfBase64: pdf.base64,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        setMessage(`Email failed: ${result.error || "Unknown error"}`);
+        return;
+      }
+
+      const saved = await saveCertificate({ emailed: true, resendId: result.id || null });
+      if (saved) setMessage(`Sick note emailed successfully to ${employerEmail}.`);
+    } catch (error) {
+      setMessage(`Email failed: ${error instanceof Error ? error.message : "Unexpected error"}`);
+    } finally {
+      setEmailing(false);
+    }
   }
 
   return (
@@ -333,10 +504,12 @@ export default function SickNotePage() {
         <input style={styles.input} placeholder="Patient email for CC" value={patientEmail} onChange={(e) => setPatientEmail(e.target.value)} />
 
         <h2 style={styles.heading}>Doctor Details</h2>
-        <input style={styles.input} placeholder="Doctor name" value={doctorName} onChange={(e) => setDoctorName(e.target.value)} />
-        <input style={styles.input} placeholder="HPCSA / registration number" value={hpcsa} onChange={(e) => setHpcsa(e.target.value)} />
-        <input style={styles.input} placeholder="Practice number" value={practiceNumber} onChange={(e) => setPracticeNumber(e.target.value)} />
-        <textarea style={styles.textareaSmall} placeholder="Practice address" value={practiceAddress} onChange={(e) => setPracticeAddress(e.target.value)} />
+        <input style={styles.input} placeholder="Doctor name" value={doctorName} readOnly />
+        <input style={styles.input} placeholder="Doctor email" value={doctorEmail} readOnly />
+        <input style={styles.input} placeholder="Doctor mobile" value={doctorMobile} readOnly />
+        <input style={styles.input} placeholder="HPCSA / registration number" value={hpcsa} readOnly />
+        <input style={styles.input} placeholder="Practice number" value={practiceNumber} readOnly />
+        <textarea style={styles.textareaSmall} placeholder="Practice address" value={practiceAddress} readOnly />
 
         <h2 style={styles.heading}>Medical Leave</h2>
         <label style={styles.label}>Date seen</label>
@@ -369,9 +542,9 @@ export default function SickNotePage() {
         </div>
 
         {message && <div style={styles.message}>{message}</div>}
-        <button style={styles.primaryButton} onClick={saveCertificate}>Save Sick Note</button>
-        <button style={styles.pdfButton} onClick={printPdf}>Export / Print PDF</button>
-        <button style={styles.emailButton} onClick={emailPdf}>Email to Employer and CC Patient</button>
+        <button style={styles.primaryButton} onClick={handleSave} disabled={saving || emailing}>{saving ? "Saving…" : "Save Sick Note"}</button>
+        <button style={styles.pdfButton} onClick={printPdf} disabled={saving || emailing}>Download PDF</button>
+        <button style={styles.emailButton} onClick={emailPdf} disabled={saving || emailing}>{emailing ? "Sending…" : "Email PDF to Employer and CC Patient"}</button>
       </section>
     </main>
   );
