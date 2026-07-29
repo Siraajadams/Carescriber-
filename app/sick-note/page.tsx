@@ -16,6 +16,16 @@ type Patient = {
   gender?: string | null;
   mobile?: string | null;
   email?: string | null;
+  dob?: string | null;
+  date_of_birth?: string | null;
+};
+
+type LinkedReferral = {
+  id: string;
+  patient_id?: string | null;
+  referral_code: string;
+  status?: string | null;
+  expires_at?: string | null;
 };
 
 type DoctorProfile = {
@@ -90,6 +100,7 @@ export default function SickNotePage() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientSearch, setPatientSearch] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [linkedReferral, setLinkedReferral] = useState<LinkedReferral | null>(null);
 
   const [patientName, setPatientName] = useState("");
   const [patientId, setPatientId] = useState("");
@@ -121,7 +132,86 @@ export default function SickNotePage() {
   useEffect(() => {
     loadPatients();
     loadDoctor();
+    restoreLinkedContext();
   }, []);
+
+  function restoreLinkedContext() {
+    try {
+      const savedPatientJson = localStorage.getItem("carescriber_selected_patient");
+      const savedPatientId = localStorage.getItem("carescriber_selected_patient_id");
+      const savedReferralJson = localStorage.getItem("carescriber_referral");
+      const savedReferralId = localStorage.getItem("carescriber_referral_id");
+      const savedReferralCode = localStorage.getItem("carescriber_referral_code");
+
+      let restoredPatient: Patient | null = null;
+
+      if (savedPatientJson) {
+        const parsed = JSON.parse(savedPatientJson) as Partial<Patient>;
+        const resolvedId = String(parsed.id || savedPatientId || "").trim();
+
+        if (resolvedId) {
+          restoredPatient = {
+            ...parsed,
+            id: resolvedId,
+          } as Patient;
+        }
+      } else if (savedPatientId) {
+        restoredPatient = {
+          id: savedPatientId,
+        };
+      }
+
+      if (restoredPatient) {
+        const restoredName = `${restoredPatient.first_name || ""} ${
+          restoredPatient.surname || restoredPatient.last_name || ""
+        }`.trim();
+
+        setSelectedPatient(restoredPatient);
+        setPatientSearch(restoredName);
+        setPatientName(restoredName);
+        setPatientId(
+          restoredPatient.id_number ||
+            restoredPatient.patient_id ||
+            "",
+        );
+        setPatientEmail(restoredPatient.email || "");
+      }
+
+      if (savedReferralJson) {
+        const parsed = JSON.parse(savedReferralJson) as Partial<LinkedReferral>;
+        const resolvedReferralId = String(
+          parsed.id || savedReferralId || "",
+        ).trim();
+        const resolvedReferralCode = String(
+          parsed.referral_code || savedReferralCode || "",
+        )
+          .trim()
+          .replace(/\s+/g, "")
+          .toUpperCase();
+
+        if (resolvedReferralId || resolvedReferralCode) {
+          setLinkedReferral({
+            ...parsed,
+            id: resolvedReferralId,
+            referral_code: resolvedReferralCode,
+          } as LinkedReferral);
+        }
+      } else if (savedReferralId || savedReferralCode) {
+        setLinkedReferral({
+          id: savedReferralId || "",
+          referral_code: (savedReferralCode || "")
+            .trim()
+            .replace(/\s+/g, "")
+            .toUpperCase(),
+        });
+      }
+    } catch (error) {
+      console.error("Could not restore linked patient/referral:", error);
+      setMessage(
+        "The linked referral could not be restored. Please unlock the SymptomAI referral again.",
+      );
+    }
+  }
 
   async function loadPatients() {
     const { data, error } = await supabase.from("patients").select("*");
@@ -224,21 +314,47 @@ export default function SickNotePage() {
   const returnDate = addOneDay(unfitUntil);
 
   function selectPatient(patient: Patient) {
-    const name = `${patient.first_name || ""} ${patient.surname || patient.last_name || ""}`.trim();
+    const name = `${patient.first_name || ""} ${
+      patient.surname || patient.last_name || ""
+    }`.trim();
+
     setSelectedPatient(patient);
     setPatientSearch(name);
     setPatientName(name);
     setPatientId(patient.id_number || patient.patient_id || "");
     setPatientEmail(patient.email || "");
+
+    localStorage.setItem(
+      "carescriber_selected_patient",
+      JSON.stringify(patient),
+    );
+    localStorage.setItem(
+      "carescriber_selected_patient_id",
+      patient.id,
+    );
+
+    // A manually selected patient must not inherit another patient's referral.
+    setLinkedReferral(null);
+    localStorage.removeItem("carescriber_referral");
+    localStorage.removeItem("carescriber_referral_id");
+    localStorage.removeItem("carescriber_referral_code");
+
     setMessage("");
   }
 
   function clearPatient() {
     setSelectedPatient(null);
+    setLinkedReferral(null);
     setPatientSearch("");
     setPatientName("");
     setPatientId("");
     setPatientEmail("");
+
+    localStorage.removeItem("carescriber_selected_patient");
+    localStorage.removeItem("carescriber_selected_patient_id");
+    localStorage.removeItem("carescriber_referral");
+    localStorage.removeItem("carescriber_referral_id");
+    localStorage.removeItem("carescriber_referral_code");
   }
 
   function getCanvasPoint(e: any) {
@@ -513,6 +629,8 @@ export default function SickNotePage() {
       certificate_number: certificateNumber,
       doctor_id: doctorProfile.id,
       patient_id: selectedPatient?.id || null,
+      referral_id: linkedReferral?.id || null,
+      referral_code: linkedReferral?.referral_code || null,
       patient_name: patientName.trim(),
       patient_id_number: patientId.trim(),
       employer_email: employerEmail.trim() || null,
@@ -578,6 +696,13 @@ export default function SickNotePage() {
       const missing = validateCertificate(true);
       if (missing.length) return showMissing(missing);
 
+      if (!selectedPatient?.id) {
+        setMessage(
+          "No CareScriber patient UUID is linked. Select a patient or unlock the SymptomAI referral again.",
+        );
+        return;
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) {
         setMessage("Your session has expired. Please sign in again.");
@@ -594,13 +719,47 @@ export default function SickNotePage() {
         body: JSON.stringify({
           to: employerEmail.trim(),
           cc: patientEmail.trim() || undefined,
+
+          patientId: selectedPatient?.id || null,
+          referralId: linkedReferral?.id || null,
+          referralCode: linkedReferral?.referral_code || null,
+
           patientName: patientName.trim(),
+          patientFirstName: selectedPatient?.first_name || "",
+          patientSurname:
+            selectedPatient?.surname ||
+            selectedPatient?.last_name ||
+            "",
+          patientIdentifier:
+            selectedPatient?.id_number ||
+            selectedPatient?.patient_id ||
+            patientId.trim(),
+          patientDateOfBirth:
+            selectedPatient?.date_of_birth ||
+            selectedPatient?.dob ||
+            "",
+          patientMobile: selectedPatient?.mobile || "",
+          patientEmail:
+            selectedPatient?.email ||
+            patientEmail.trim() ||
+            "",
+
           certificateNumber,
+
+          doctorId: doctorProfile?.id || null,
           doctorName: doctorName.trim(),
+          doctorRegistrationNumber: hpcsa.trim(),
+          practiceName: "CareScriber",
+          practiceAddress: practiceAddress.trim(),
+
           dateSeen,
           unfitFrom,
           unfitUntil,
           returnDate,
+
+          diagnosis: diagnosisParts().description,
+          clinicalNotes: comments.trim(),
+
           filename: pdf.filename,
           pdfBase64: pdf.base64,
         }),
@@ -612,7 +771,10 @@ export default function SickNotePage() {
         return;
       }
 
-      const saved = await saveCertificate({ emailed: true, resendId: result.id || null });
+      const saved = await saveCertificate({
+        emailed: true,
+        resendId: result.emailId || result.id || null,
+      });
       if (saved) setMessage(`Sick note emailed successfully to ${employerEmail}.`);
     } catch (error) {
       setMessage(`Email failed: ${error instanceof Error ? error.message : "Unexpected error"}`);
@@ -638,6 +800,12 @@ export default function SickNotePage() {
         <p style={styles.subtitle}>Generate a sick note with ICD-10 diagnosis, digital signature, PDF export and email to employer with patient copied.</p>
 
         <div style={styles.info}>Certificate Number: {certificateNumber}</div>
+
+        {linkedReferral?.referral_code && (
+          <div style={styles.referralInfo}>
+            Linked SymptomAI Referral: {linkedReferral.referral_code}
+          </div>
+        )}
 
         <h2 style={styles.heading}>Find Patient</h2>
         <input style={styles.input} placeholder="Search patient by name, surname, ID or mobile" value={patientSearch} onChange={(e) => { setPatientSearch(e.target.value); setSelectedPatient(null); }} />
@@ -728,6 +896,7 @@ const styles: Record<string, CSSProperties> = {
   selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
   clearSmall: { display: "block", marginTop: 10, border: 0, borderRadius: 12, background: "#fff", color: "#166534", padding: 10, fontWeight: 900 },
   info: { background: "#dcfce7", color: "#166534", padding: 14, borderRadius: 14, fontWeight: 900, marginTop: 16 },
+  referralInfo: { background: "#dbeafe", color: "#1d4ed8", padding: 14, borderRadius: 14, fontWeight: 900, marginTop: 12 },
   icdBox: { border: "1px solid #cbd5e1", borderRadius: 16, marginTop: 8, overflow: "hidden" },
   icdItem: { display: "block", width: "100%", textAlign: "left", padding: 14, background: "#fff", border: 0, borderBottom: "1px solid #e2e8f0", fontSize: 16 },
   canvas: { width: "100%", height: 190, border: "2px dashed #cbd5e1", borderRadius: 18, background: "#fff", touchAction: "none" },
