@@ -6,7 +6,8 @@ import {
   type CSSProperties,
 } from "react";
 import Link from "next/link";
-import { supabase } from "../lib/supabase";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabase";
 
 type DoctorProfile = {
   id?: string;
@@ -31,6 +32,7 @@ type DoctorProfile = {
 };
 
 export default function DoctorProfilePage() {
+  const router = useRouter();
   const [profileId, setProfileId] = useState("");
   const [authUserId, setAuthUserId] = useState("");
 
@@ -70,9 +72,7 @@ export default function DoctorProfilePage() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setMessage(
-          "Your login session could not be found. Please sign in again.",
-        );
+        router.replace("/login");
         return;
       }
 
@@ -226,9 +226,7 @@ export default function DoctorProfilePage() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setMessage(
-          "Your session has expired. Please sign in again.",
-        );
+        router.replace("/login");
         return;
       }
 
@@ -349,6 +347,12 @@ export default function DoctorProfilePage() {
     }
   }
 
+  async function signOut() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+    router.refresh();
+  }
+
   if (loading) {
     return (
       <main style={styles.page}>
@@ -364,31 +368,44 @@ export default function DoctorProfilePage() {
   return (
     <main style={styles.page}>
       <section style={styles.card}>
-        <Link
-          href="/dashboard"
-          style={styles.back}
-        >
-          ← Back to Dashboard
-        </Link>
+        <div style={styles.topBar}>
+          <Link
+            href="/dashboard"
+            style={styles.back}
+          >
+            ← Back to Dashboard
+          </Link>
+
+          <button
+            type="button"
+            style={styles.signOutButton}
+            onClick={signOut}
+          >
+            Sign out
+          </button>
+        </div>
 
         <p style={styles.kicker}>
           CareScriber
         </p>
 
         <h1 style={styles.title}>
-          My Profile
+          My Doctor Profile
         </h1>
 
         <p style={styles.subtitle}>
           Update the professional details that
-          appear on prescriptions, referrals and
-          medical certificates.
+          appear on prescriptions, referrals,
+          consultation documents and medical
+          certificates.
         </p>
 
         <div style={styles.notice}>
-          Changes to your login email may require
-          confirmation from both your current and
-          new email addresses.
+          <strong>Email changes:</strong> Updating
+          your email here also requests a change to
+          your CareScriber login email. Confirmation
+          may be required before the new login email
+          becomes active.
         </div>
 
         <h2 style={styles.heading}>
@@ -548,11 +565,28 @@ const styles: Record<
       "0 20px 60px rgba(15,23,42,.12)",
   },
 
+  topBar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 14,
+  },
+
   back: {
     color: "#2563eb",
     fontWeight: 800,
     textDecoration: "none",
     fontSize: 18,
+  },
+
+  signOutButton: {
+    border: "1px solid #cbd5e1",
+    borderRadius: 12,
+    padding: "10px 14px",
+    background: "#ffffff",
+    color: "#334155",
+    fontWeight: 800,
+    cursor: "pointer",
   },
 
   kicker: {
@@ -563,7 +597,7 @@ const styles: Record<
   },
 
   title: {
-    fontSize: 48,
+    fontSize: "clamp(36px, 7vw, 48px)",
     lineHeight: 1,
     margin: "12px 0",
     fontWeight: 900,
