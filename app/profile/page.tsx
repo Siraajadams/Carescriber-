@@ -247,7 +247,6 @@ export default function DoctorProfilePage() {
 
         registration_number:
           registrationNumber.trim(),
-        hpcsa: registrationNumber.trim(),
 
         practice_number:
           practiceNumber.trim(),
