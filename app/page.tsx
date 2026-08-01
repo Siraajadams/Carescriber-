@@ -9,20 +9,20 @@ export default function HomePage() {
         <h1 style={styles.title}>CareScriber AI</h1>
 
         <p style={styles.subtitle}>
-          Secure clinical workflow for doctors. Review paid virtual-consult
-          referrals, accept patients from the inbox, create SOAP notes,
-          prescriptions, consultation summaries and medical certificates.
+          Secure clinical workflow for doctors. Create SOAP notes,
+          prescriptions, consultation summaries, patient records and medical
+          certificates after secure login.
         </p>
 
-        <div style={styles.inboxFeature}>
-          <div style={styles.inboxIcon}>📥</div>
+        <div style={styles.secureFeature}>
+          <div style={styles.secureIcon}>🔒</div>
 
           <div>
-            <h2 style={styles.inboxTitle}>Virtual Consult Inbox</h2>
+            <h2 style={styles.secureTitle}>Secure Doctor Access</h2>
 
-            <p style={styles.inboxText}>
-              Paid SymptomAI referrals will appear in the doctor queue, with
-              the oldest waiting request displayed first.
+            <p style={styles.secureText}>
+              The Virtual Consult Inbox, patient records, prescriptions, sick
+              notes and doctor profile are only available after doctor login.
             </p>
           </div>
         </div>
@@ -32,56 +32,34 @@ export default function HomePage() {
             Doctor Login
           </Link>
 
-          <Link href="/inbox" style={styles.inboxButton}>
-            Open Virtual Consult Inbox
-          </Link>
-
           <Link href="/register" style={styles.secondary}>
             Register as Doctor
-          </Link>
-
-          <Link href="/profile" style={styles.profileButton}>
-            Update My Doctor Profile
           </Link>
         </div>
 
         <div style={styles.workflowNotice}>
-          <strong>Virtual consult workflow:</strong>
+          <strong>After login, doctors can:</strong>
+
           <ol style={styles.workflowList}>
-            <li>Paid referrals enter the doctor inbox.</li>
-            <li>The oldest waiting request appears first.</li>
-            <li>The doctor accepts the request.</li>
-            <li>
-              The doctor opens the patient using the referral code and consent
-              token.
-            </li>
-            <li>
-              The existing consultation, e-Script and sick-note workflows
-              continue as normal.
-            </li>
+            <li>Open the Virtual Consult Inbox.</li>
+            <li>Review paid SymptomAI referrals.</li>
+            <li>Accept the oldest waiting request.</li>
+            <li>Open the patient using the referral and consent details.</li>
+            <li>Create consultation notes, e-Scripts and sick notes.</li>
           </ol>
         </div>
 
-        <div style={styles.profileNotice}>
-          <strong>Doctor profile:</strong> Logged-in doctors can update their
-          email address, mobile number, HPCSA or MP registration number,
-          practice number, qualifications and practice address.
-        </div>
-
         <div style={styles.notice}>
-          <strong>Restricted access:</strong> The virtual consult inbox,
+          <strong>Restricted access:</strong> The Virtual Consult Inbox,
           patient search, consultations, SOAP notes, prescriptions, referrals,
-          sick notes and doctor-profile updates are only available after secure
-          doctor login.
+          sick notes and doctor-profile updates require secure doctor login.
         </div>
       </section>
     </main>
   );
 }
 
-const styles: {
-  [key: string]: React.CSSProperties;
-} = {
+const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     background:
@@ -124,7 +102,7 @@ const styles: {
     marginBottom: "26px",
   },
 
-  inboxFeature: {
+  secureFeature: {
     display: "flex",
     gap: "16px",
     alignItems: "flex-start",
@@ -134,7 +112,7 @@ const styles: {
     padding: "20px",
   },
 
-  inboxIcon: {
+  secureIcon: {
     width: "52px",
     height: "52px",
     flexShrink: 0,
@@ -147,14 +125,14 @@ const styles: {
     fontSize: "26px",
   },
 
-  inboxTitle: {
+  secureTitle: {
     margin: 0,
     color: "#0f172a",
     fontSize: "22px",
     lineHeight: "28px",
   },
 
-  inboxText: {
+  secureText: {
     marginTop: "8px",
     marginBottom: 0,
     color: "#475569",
@@ -179,17 +157,6 @@ const styles: {
     textDecoration: "none",
   },
 
-  inboxButton: {
-    background: "#0f766e",
-    color: "#ffffff",
-    padding: "18px",
-    borderRadius: "16px",
-    textAlign: "center",
-    fontWeight: 700,
-    fontSize: "18px",
-    textDecoration: "none",
-  },
-
   secondary: {
     background: "#ffffff",
     color: "#2563eb",
@@ -200,17 +167,6 @@ const styles: {
     fontSize: "18px",
     textDecoration: "none",
     border: "2px solid #2563eb",
-  },
-
-  profileButton: {
-    background: "#f97316",
-    color: "#ffffff",
-    padding: "18px",
-    borderRadius: "16px",
-    textAlign: "center",
-    fontWeight: 700,
-    fontSize: "18px",
-    textDecoration: "none",
   },
 
   workflowNotice: {
@@ -228,16 +184,6 @@ const styles: {
     marginTop: "10px",
     marginBottom: 0,
     paddingLeft: "22px",
-  },
-
-  profileNotice: {
-    marginTop: "16px",
-    background: "#fff7ed",
-    color: "#9a3412",
-    padding: "18px",
-    borderRadius: "16px",
-    fontSize: "15px",
-    lineHeight: "22px",
   },
 
   notice: {
