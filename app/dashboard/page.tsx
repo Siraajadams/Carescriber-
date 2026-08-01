@@ -18,17 +18,13 @@ type DoctorProfile = {
 export default function DashboardPage() {
   const router = useRouter();
 
-  const [doctorName, setDoctorName] =
-    useState("Doctor");
-
-  const [profileSummary, setProfileSummary] =
-    useState("");
-
-  const [loading, setLoading] =
-    useState(true);
+  const [doctorName, setDoctorName] = useState("Doctor");
+  const [profileSummary, setProfileSummary] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [waitingReferralCount, setWaitingReferralCount] = useState(0);
 
   useEffect(() => {
-    async function checkLogin() {
+    async function loadDashboard() {
       try {
         const {
           data: { user },
@@ -40,13 +36,8 @@ export default function DashboardPage() {
           return;
         }
 
-        let profile: DoctorProfile | null =
-          null;
+        let profile: DoctorProfile | null = null;
 
-        /*
-         * Some profiles use profiles.id =
-         * auth.users.id.
-         */
         const byId = await supabase
           .from("profiles")
           .select(`
@@ -62,13 +53,9 @@ export default function DashboardPage() {
           .maybeSingle();
 
         if (!byId.error && byId.data) {
-          profile =
-            byId.data as DoctorProfile;
+          profile = byId.data as DoctorProfile;
         }
 
-        /*
-         * Other profiles use profiles.user_id.
-         */
         if (!profile) {
           const byUserId = await supabase
             .from("profiles")
@@ -84,12 +71,8 @@ export default function DashboardPage() {
             .eq("user_id", user.id)
             .maybeSingle();
 
-          if (
-            !byUserId.error &&
-            byUserId.data
-          ) {
-            profile =
-              byUserId.data as DoctorProfile;
+          if (!byUserId.error && byUserId.data) {
+            profile = byUserId.data as DoctorProfile;
           }
         }
 
@@ -105,12 +88,7 @@ export default function DashboardPage() {
           user.user_metadata?.last_name ||
           "";
 
-        const fullName = [
-          firstName,
-          surname,
-        ]
-          .filter(Boolean)
-          .join(" ");
+        const fullName = [firstName, surname].filter(Boolean).join(" ");
 
         setDoctorName(fullName);
 
@@ -119,8 +97,7 @@ export default function DashboardPage() {
           profile?.hpcsa ||
           "";
 
-        const practiceNumber =
-          profile?.practice_number || "";
+        const practiceNumber = profile?.practice_number || "";
 
         const summaryParts = [
           registrationNumber
@@ -131,9 +108,25 @@ export default function DashboardPage() {
             : "",
         ].filter(Boolean);
 
-        setProfileSummary(
-          summaryParts.join(" • "),
-        );
+        setProfileSummary(summaryParts.join(" • "));
+
+        const { count, error: countError } = await supabase
+          .from("symptomai_referrals")
+          .select("id", {
+            count: "exact",
+            head: true,
+          })
+          .eq("payment_status", "paid")
+          .eq("queue_status", "waiting");
+
+        if (countError) {
+          console.error(
+            "Could not load inbox count:",
+            countError,
+          );
+        } else {
+          setWaitingReferralCount(count || 0);
+        }
       } catch (error) {
         console.error(
           "Dashboard profile error:",
@@ -144,7 +137,7 @@ export default function DashboardPage() {
       }
     }
 
-    void checkLogin();
+    void loadDashboard();
   }, [router]);
 
   async function logout() {
@@ -177,9 +170,10 @@ export default function DashboardPage() {
         </h1>
 
         <p style={styles.subtitle}>
-          Simple clinical assistant for
-          consultations, SOAP notes, patient
-          summaries and clinical documents.
+          Secure clinical workflow for paid
+          virtual consultations, patient records,
+          SOAP notes, prescriptions and medical
+          certificates.
         </p>
 
         {profileSummary && (
@@ -189,6 +183,41 @@ export default function DashboardPage() {
         )}
 
         <div style={styles.grid}>
+          <Link
+            href="/inbox"
+            style={styles.inboxCard}
+          >
+            <div style={styles.inboxTopRow}>
+              <div style={styles.icon}>📥</div>
+
+              {waitingReferralCount > 0 && (
+                <div style={styles.inboxBadge}>
+                  {waitingReferralCount}
+                </div>
+              )}
+            </div>
+
+            <h2 style={styles.cardTitle}>
+              Virtual Consult Inbox
+            </h2>
+
+            <p style={styles.cardText}>
+              Review paid SymptomAI referrals,
+              accept the oldest waiting request
+              and open the linked patient file.
+            </p>
+
+            <div style={styles.inboxStatus}>
+              {waitingReferralCount === 0
+                ? "No paid referrals currently waiting"
+                : `${waitingReferralCount} paid ${
+                    waitingReferralCount === 1
+                      ? "referral"
+                      : "referrals"
+                  } waiting`}
+            </div>
+          </Link>
+
           <Link
             href="/consultation"
             style={styles.primaryCard}
@@ -209,9 +238,7 @@ export default function DashboardPage() {
             href="/patients"
             style={styles.optionCard}
           >
-            <div style={styles.icon}>
-              🔍
-            </div>
+            <div style={styles.icon}>🔍</div>
 
             <h2 style={styles.cardTitle}>
               Search Patient
@@ -227,9 +254,7 @@ export default function DashboardPage() {
             href="/consultation"
             style={styles.optionCard}
           >
-            <div style={styles.icon}>
-              📝
-            </div>
+            <div style={styles.icon}>📝</div>
 
             <h2 style={styles.cardTitle}>
               Recent Consultations
@@ -242,12 +267,43 @@ export default function DashboardPage() {
           </Link>
 
           <Link
+            href="/e-script"
+            style={styles.optionCard}
+          >
+            <div style={styles.icon}>💊</div>
+
+            <h2 style={styles.cardTitle}>
+              e-Script
+            </h2>
+
+            <p style={styles.cardText}>
+              Create and send an electronic
+              prescription for the selected
+              patient.
+            </p>
+          </Link>
+
+          <Link
+            href="/sick-note"
+            style={styles.optionCard}
+          >
+            <div style={styles.icon}>📄</div>
+
+            <h2 style={styles.cardTitle}>
+              Sick Note
+            </h2>
+
+            <p style={styles.cardText}>
+              Generate and email a medical
+              certificate after consultation.
+            </p>
+          </Link>
+
+          <Link
             href="/profile"
             style={styles.profileCard}
           >
-            <div style={styles.icon}>
-              👤
-            </div>
+            <div style={styles.icon}>👤</div>
 
             <h2 style={styles.cardTitle}>
               My Profile
@@ -264,13 +320,15 @@ export default function DashboardPage() {
 
         <div style={styles.workflow}>
           <h3 style={styles.workflowTitle}>
-            CareScriber Workflow
+            Virtual Consult Workflow
           </h3>
 
-          <p>1. Select Patient</p>
-          <p>2. Start Recording</p>
-          <p>3. Generate SOAP Note</p>
-          <p>4. Save Consultation</p>
+          <p>1. Open Virtual Consult Inbox</p>
+          <p>2. Accept the oldest paid referral</p>
+          <p>3. Open the linked patient file</p>
+          <p>4. Complete consultation and SOAP note</p>
+          <p>5. Generate e-Script or Sick Note</p>
+          <p>6. Mark referral completed</p>
         </div>
 
         <button
@@ -343,6 +401,47 @@ const styles: {
     marginTop: 28,
   },
 
+  inboxCard: {
+    display: "block",
+    background:
+      "linear-gradient(135deg, #0f766e 0%, #115e59 100%)",
+    color: "#ffffff",
+    padding: 24,
+    borderRadius: 22,
+    textDecoration: "none",
+    boxShadow:
+      "0 14px 30px rgba(15, 118, 110, 0.24)",
+  },
+
+  inboxTopRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+
+  inboxBadge: {
+    minWidth: 38,
+    height: 38,
+    padding: "0 10px",
+    borderRadius: 999,
+    background: "#dc2626",
+    color: "#ffffff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 18,
+    fontWeight: 800,
+  },
+
+  inboxStatus: {
+    marginTop: 16,
+    padding: "10px 12px",
+    borderRadius: 12,
+    background: "rgba(255, 255, 255, 0.16)",
+    fontSize: 15,
+    fontWeight: 700,
+  },
+
   primaryCard: {
     display: "block",
     background: "#2563eb",
@@ -391,10 +490,11 @@ const styles: {
 
   workflow: {
     marginTop: 28,
-    background: "#eff6ff",
+    background: "#ecfdf5",
     padding: 22,
     borderRadius: 20,
-    color: "#1e3a8a",
+    color: "#065f46",
+    border: "1px solid #a7f3d0",
   },
 
   workflowTitle: {
