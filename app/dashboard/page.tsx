@@ -24,7 +24,7 @@ export default function DashboardPage() {
   const [waitingReferralCount, setWaitingReferralCount] = useState(0);
 
   useEffect(() => {
-    async function loadDashboard() {
+    async function checkLogin() {
       try {
         const {
           data: { user },
@@ -120,24 +120,18 @@ export default function DashboardPage() {
           .eq("queue_status", "waiting");
 
         if (countError) {
-          console.error(
-            "Could not load inbox count:",
-            countError,
-          );
+          console.error("Could not load inbox count:", countError);
         } else {
           setWaitingReferralCount(count || 0);
         }
       } catch (error) {
-        console.error(
-          "Dashboard profile error:",
-          error,
-        );
+        console.error("Dashboard profile error:", error);
       } finally {
         setLoading(false);
       }
     }
 
-    void loadDashboard();
+    void checkLogin();
   }, [router]);
 
   async function logout() {
@@ -150,9 +144,7 @@ export default function DashboardPage() {
     return (
       <main style={styles.page}>
         <section style={styles.card}>
-          <p style={styles.loading}>
-            Loading dashboard…
-          </p>
+          <p style={styles.loading}>Loading dashboard…</p>
         </section>
       </main>
     );
@@ -161,32 +153,21 @@ export default function DashboardPage() {
   return (
     <main style={styles.page}>
       <section style={styles.card}>
-        <p style={styles.label}>
-          CareScriber AI
-        </p>
+        <p style={styles.label}>CareScriber AI</p>
 
-        <h1 style={styles.title}>
-          Welcome, Dr {doctorName}
-        </h1>
+        <h1 style={styles.title}>Welcome, Dr {doctorName}</h1>
 
         <p style={styles.subtitle}>
-          Secure clinical workflow for paid
-          virtual consultations, patient records,
-          SOAP notes, prescriptions and medical
-          certificates.
+          Secure clinical assistant for virtual consultations, SOAP notes,
+          patient summaries, prescriptions and clinical documents.
         </p>
 
         {profileSummary && (
-          <div style={styles.profileSummary}>
-            {profileSummary}
-          </div>
+          <div style={styles.profileSummary}>{profileSummary}</div>
         )}
 
         <div style={styles.grid}>
-          <Link
-            href="/inbox"
-            style={styles.inboxCard}
-          >
+          <Link href="/inbox" style={styles.inboxCard}>
             <div style={styles.inboxTopRow}>
               <div style={styles.icon}>📥</div>
 
@@ -202,9 +183,8 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Review paid SymptomAI referrals,
-              accept the oldest waiting request
-              and open the linked patient file.
+              Review paid SymptomAI referrals, accept the oldest waiting
+              request and open the linked patient file.
             </p>
 
             <div style={styles.inboxStatus}>
@@ -229,8 +209,7 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Start recording, generate a
-              transcript and create a SOAP note.
+              Start recording, generate a transcript and create a SOAP note.
             </p>
           </Link>
 
@@ -245,8 +224,7 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Find or register a patient before
-              starting a consultation.
+              Find or register a patient before starting a consultation.
             </p>
           </Link>
 
@@ -261,8 +239,7 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Continue with the latest
-              consultation workflow.
+              Continue with the latest consultation workflow.
             </p>
           </Link>
 
@@ -277,9 +254,7 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Create and send an electronic
-              prescription for the selected
-              patient.
+              Generate and send an electronic prescription.
             </p>
           </Link>
 
@@ -294,8 +269,7 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Generate and email a medical
-              certificate after consultation.
+              Generate and email a medical certificate.
             </p>
           </Link>
 
@@ -310,10 +284,8 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Update your email, mobile number,
-              HPCSA or MP number, practice
-              number, qualifications and
-              practice address.
+              Update your email, mobile number, HPCSA or MP number, practice
+              number, qualifications and practice address.
             </p>
           </Link>
         </div>
