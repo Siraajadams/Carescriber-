@@ -7,9 +7,10 @@ export const dynamic = "force-dynamic";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceRoleKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY;
-
 const careScriberApiSecret =
   process.env.CARESCRIBER_API_SECRET;
+
+const REFERRAL_TABLE = "symptomai_referrals";
 
 type SymptomAIReferralBody = {
   referralCode?: string;
@@ -118,6 +119,12 @@ type ReferralRecord = {
   [key: string]: unknown;
 };
 
+type ReleaseResult = {
+  referral: ReferralRecord;
+  created: boolean;
+  updateMode: "complete" | "compatible";
+};
+
 function getSupabaseAdmin() {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error(
@@ -154,9 +161,7 @@ function cleanString(
   return cleaned.substring(0, maxLength);
 }
 
-function normaliseReferralCode(
-  value: unknown,
-): string {
+function normaliseReferralCode(value: unknown): string {
   return String(value || "")
     .trim()
     .toUpperCase();
@@ -168,10 +173,7 @@ function firstString(
   maxLength = 500,
 ): string | null {
   for (const key of keys) {
-    const value = cleanString(
-      body[key],
-      maxLength,
-    );
+    const value = cleanString(body[key], maxLength);
 
     if (value) {
       return value;
@@ -198,12 +200,10 @@ function normalisePaymentStatus(
     return "paid";
   }
 
-  return status || "paid";
+  return status;
 }
 
-function parseAmount(
-  value: unknown,
-): number {
+function parseAmount(value: unknown): number {
   if (
     typeof value === "number" &&
     Number.isFinite(value)
@@ -222,6 +222,22 @@ function parseAmount(
   return 250;
 }
 
+function isValidDate(value: string | null): boolean {
+  if (!value) {
+    return true;
+  }
+
+  return !Number.isNaN(Date.parse(value));
+}
+
+function isValidEmail(value: string | null): boolean {
+  if (!value) {
+    return true;
+  }
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 function getApiSecretFromRequest(
   req: NextRequest,
 ): string | null {
@@ -229,13 +245,11 @@ function getApiSecretFromRequest(
     req.headers.get("authorization");
 
   if (
-    authorization?.toLowerCase().startsWith(
-      "bearer ",
-    )
+    authorization
+      ?.toLowerCase()
+      .startsWith("bearer ")
   ) {
-    return authorization
-      .slice(7)
-      .trim();
+    return authorization.slice(7).trim();
   }
 
   return (
@@ -252,26 +266,32 @@ function safeEqual(
     return false;
   }
 
-  let result = 0;
+  let difference = 0;
 
-  for (let index = 0; index < supplied.length; index += 1) {
-    result |=
+  for (
+    let index = 0;
+    index < supplied.length;
+    index += 1
+  ) {
+    difference |=
       supplied.charCodeAt(index) ^
       expected.charCodeAt(index);
   }
 
-  return result === 0;
+  return difference === 0;
 }
 
 function validateApiSecret(
   req: NextRequest,
 ): {
   valid: boolean;
+  status: number;
   error?: string;
 } {
   if (!careScriberApiSecret) {
     return {
       valid: false,
+      status: 500,
       error:
         "CARESCRIBER_API_SECRET is not configured in CareScriber.",
     };
@@ -283,6 +303,7 @@ function validateApiSecret(
   if (!suppliedSecret) {
     return {
       valid: false,
+      status: 401,
       error:
         "Missing CareScriber API authentication.",
     };
@@ -296,6 +317,7 @@ function validateApiSecret(
   ) {
     return {
       valid: false,
+      status: 401,
       error:
         "Invalid CareScriber API authentication.",
     };
@@ -303,12 +325,15 @@ function validateApiSecret(
 
   return {
     valid: true,
+    status: 200,
   };
 }
 
 function buildReferralPayload(
   body: SymptomAIReferralBody,
 ): ReferralRecord {
+  const now = new Date().toISOString();
+
   const referralCode =
     normaliseReferralCode(
       body.referralCode ||
@@ -352,26 +377,79 @@ function buildReferralPayload(
 
   const patientName =
     suppliedPatientName ||
-    combinedPatientName;
+    combinedPatientName ||
+    "SymptomAI Patient";
 
-  const paymentStatus =
-    normalisePaymentStatus(
-      firstString(
-        body,
-        [
-          "paymentStatus",
-          "payment_status",
-        ],
-        50,
-      ),
+  const patientId =
+    firstString(
+      body,
+      [
+        "patientId",
+        "patient_id",
+        "nationalId",
+        "national_id",
+      ],
+      200,
     );
 
-  const now =
-    new Date().toISOString();
+  const nationalId =
+    firstString(
+      body,
+      [
+        "nationalId",
+        "national_id",
+        "patientId",
+        "patient_id",
+      ],
+      200,
+    );
+
+  const patientEmail =
+    firstString(
+      body,
+      [
+        "patientEmail",
+        "patient_email",
+        "email",
+      ],
+      200,
+    );
+
+  const patientMobile =
+    firstString(
+      body,
+      [
+        "patientMobile",
+        "patient_mobile",
+        "mobile",
+        "phone",
+      ],
+      50,
+    );
+
+  const dateOfBirth =
+    firstString(
+      body,
+      [
+        "dateOfBirth",
+        "date_of_birth",
+        "dob",
+      ],
+      30,
+    );
+
+  const suppliedPaidAt =
+    firstString(
+      body,
+      [
+        "paidAt",
+        "paid_at",
+      ],
+      50,
+    );
 
   return {
-    referral_code:
-      referralCode,
+    referral_code: referralCode,
 
     consent_token:
       firstString(
@@ -393,39 +471,13 @@ function buildReferralPayload(
       patientName,
 
     patient_id:
-      firstString(
-        body,
-        [
-          "patientId",
-          "patient_id",
-          "nationalId",
-          "national_id",
-        ],
-        200,
-      ),
+      patientId,
 
     national_id:
-      firstString(
-        body,
-        [
-          "nationalId",
-          "national_id",
-          "patientId",
-          "patient_id",
-        ],
-        200,
-      ),
+      nationalId,
 
     date_of_birth:
-      firstString(
-        body,
-        [
-          "dateOfBirth",
-          "date_of_birth",
-          "dob",
-        ],
-        30,
-      ),
+      dateOfBirth,
 
     gender:
       firstString(
@@ -435,27 +487,10 @@ function buildReferralPayload(
       ),
 
     email:
-      firstString(
-        body,
-        [
-          "patientEmail",
-          "patient_email",
-          "email",
-        ],
-        200,
-      ),
+      patientEmail,
 
     mobile:
-      firstString(
-        body,
-        [
-          "patientMobile",
-          "patient_mobile",
-          "mobile",
-          "phone",
-        ],
-        50,
-      ),
+      patientMobile,
 
     consultation_reason:
       firstString(
@@ -467,28 +502,12 @@ function buildReferralPayload(
         1000,
       ),
 
-    payment_status:
-      paymentStatus,
-
-    queue_status:
-      firstString(
-        body,
-        [
-          "queueStatus",
-          "queue_status",
-        ],
-        50,
-      ) || "waiting",
-
-    referral_status:
-      firstString(
-        body,
-        [
-          "referralStatus",
-          "referral_status",
-        ],
-        100,
-      ) || "ready_for_doctor",
+    /*
+     * These exact values must match the inbox query.
+     */
+    payment_status: "paid",
+    queue_status: "waiting",
+    referral_status: "ready_for_doctor",
 
     consultation_fee:
       parseAmount(
@@ -526,14 +545,7 @@ function buildReferralPayload(
       ),
 
     paid_at:
-      firstString(
-        body,
-        [
-          "paidAt",
-          "paid_at",
-        ],
-        50,
-      ) || now,
+      suppliedPaidAt || now,
 
     source:
       firstString(
@@ -542,9 +554,45 @@ function buildReferralPayload(
         100,
       ) || "symptomai",
 
-    updated_at:
-      now,
+    updated_at: now,
   };
+}
+
+function validateReferralPayload(
+  payload: ReferralRecord,
+): string | null {
+  if (!payload.referral_code) {
+    return "Referral code is required.";
+  }
+
+  if (!payload.consent_token) {
+    return "Consent token is required.";
+  }
+
+  if (!payload.consultation_reason) {
+    return (
+      "Reason for consultation or prescription " +
+      "request is required."
+    );
+  }
+
+  if (!isValidEmail(payload.email || null)) {
+    return "The patient email address is invalid.";
+  }
+
+  if (
+    !isValidDate(
+      payload.date_of_birth || null,
+    )
+  ) {
+    return "The patient date of birth is invalid.";
+  }
+
+  if (!isValidDate(payload.paid_at || null)) {
+    return "The Stripe payment date is invalid.";
+  }
+
+  return null;
 }
 
 async function findExistingReferral(
@@ -552,14 +600,24 @@ async function findExistingReferral(
 ): Promise<ReferralRecord | null> {
   const supabase = getSupabaseAdmin();
 
+  /*
+   * Limit avoids maybeSingle failing if old duplicate
+   * referral rows already exist.
+   */
   const { data, error } = await supabase
-    .from("symptomai_referrals")
+    .from(REFERRAL_TABLE)
     .select("*")
     .ilike(
       "referral_code",
       referralCode,
     )
-    .maybeSingle();
+    .order(
+      "created_at",
+      {
+        ascending: false,
+      },
+    )
+    .limit(1);
 
   if (error) {
     throw new Error(
@@ -567,127 +625,32 @@ async function findExistingReferral(
     );
   }
 
-  return (
-    data as ReferralRecord | null
-  ) || null;
+  if (!data || data.length === 0) {
+    return null;
+  }
+
+  return data[0] as ReferralRecord;
 }
 
-async function updateExistingReferral(
-  existingReferral: ReferralRecord,
-  payload: ReferralRecord,
-): Promise<ReferralRecord> {
-  const supabase = getSupabaseAdmin();
-
-  if (!existingReferral.id) {
-    throw new Error(
-      "Existing referral has no ID.",
-    );
-  }
-
-  const updatePayload = {
-    ...payload,
-  };
-
-  delete updatePayload.id;
-  delete updatePayload.created_at;
-
-  const completeResult = await supabase
-    .from("symptomai_referrals")
-    .update(updatePayload)
-    .eq("id", existingReferral.id)
-    .select("*")
-    .single();
-
-  if (
-    !completeResult.error &&
-    completeResult.data
-  ) {
-    return completeResult.data as ReferralRecord;
-  }
-
-  console.warn(
-    "Complete CareScriber referral update failed. Trying essential fields only.",
-    completeResult.error,
+function removeUndefinedValues(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).filter(
+      ([, value]) => value !== undefined,
+    ),
   );
-
-  const essentialPayload = {
-    payment_status: "paid",
-    queue_status: "waiting",
-    referral_status:
-      "ready_for_doctor",
-
-    consultation_reason:
-      payload.consultation_reason,
-
-    patient_name:
-      payload.patient_name,
-
-    patient_id:
-      payload.patient_id,
-
-    email:
-      payload.email,
-
-    mobile:
-      payload.mobile,
-
-    updated_at:
-      payload.updated_at,
-  };
-
-  const essentialResult = await supabase
-    .from("symptomai_referrals")
-    .update(essentialPayload)
-    .eq("id", existingReferral.id)
-    .select("*")
-    .single();
-
-  if (
-    essentialResult.error ||
-    !essentialResult.data
-  ) {
-    throw new Error(
-      `CareScriber referral update failed: ${
-        essentialResult.error?.message ||
-        completeResult.error?.message ||
-        "Unknown Supabase error."
-      }`,
-    );
-  }
-
-  return essentialResult.data as ReferralRecord;
 }
 
-async function insertNewReferral(
+function buildCompatiblePayload(
   payload: ReferralRecord,
-): Promise<ReferralRecord> {
-  const supabase = getSupabaseAdmin();
-
-  const completeInsert = {
-    ...payload,
-    created_at:
-      new Date().toISOString(),
-  };
-
-  const completeResult = await supabase
-    .from("symptomai_referrals")
-    .insert(completeInsert)
-    .select("*")
-    .single();
-
-  if (
-    !completeResult.error &&
-    completeResult.data
-  ) {
-    return completeResult.data as ReferralRecord;
-  }
-
-  console.warn(
-    "Complete CareScriber referral insert failed. Trying essential fields only.",
-    completeResult.error,
-  );
-
-  const essentialInsert = {
+): Record<string, unknown> {
+  /*
+   * These are the fields required by the doctor inbox.
+   * This fallback is used if newer optional columns have
+   * not yet been created in Supabase.
+   */
+  return removeUndefinedValues({
     referral_code:
       payload.referral_code,
 
@@ -718,41 +681,173 @@ async function insertNewReferral(
     referral_status:
       "ready_for_doctor",
 
-    created_at:
-      new Date().toISOString(),
-
     updated_at:
-      new Date().toISOString(),
-  };
+      payload.updated_at,
+  });
+}
 
-  const essentialResult = await supabase
-    .from("symptomai_referrals")
-    .insert(essentialInsert)
+async function updateExistingReferral(
+  existingReferral: ReferralRecord,
+  payload: ReferralRecord,
+): Promise<{
+  referral: ReferralRecord;
+  updateMode: "complete" | "compatible";
+}> {
+  const supabase = getSupabaseAdmin();
+
+  if (!existingReferral.id) {
+    throw new Error(
+      "Existing referral has no Supabase ID.",
+    );
+  }
+
+  const completePayload:
+    Record<string, unknown> = {
+      ...payload,
+    };
+
+  delete completePayload.id;
+  delete completePayload.created_at;
+
+  const completeResult = await supabase
+    .from(REFERRAL_TABLE)
+    .update(
+      removeUndefinedValues(
+        completePayload,
+      ),
+    )
+    .eq(
+      "id",
+      existingReferral.id,
+    )
     .select("*")
     .single();
 
   if (
-    essentialResult.error ||
-    !essentialResult.data
+    !completeResult.error &&
+    completeResult.data
+  ) {
+    return {
+      referral:
+        completeResult.data as ReferralRecord,
+      updateMode: "complete",
+    };
+  }
+
+  console.warn(
+    `Complete update failed for ${payload.referral_code}. ` +
+      "Trying compatible inbox fields.",
+    completeResult.error?.message,
+  );
+
+  const compatibleResult =
+    await supabase
+      .from(REFERRAL_TABLE)
+      .update(
+        buildCompatiblePayload(payload),
+      )
+      .eq(
+        "id",
+        existingReferral.id,
+      )
+      .select("*")
+      .single();
+
+  if (
+    compatibleResult.error ||
+    !compatibleResult.data
   ) {
     throw new Error(
-      `CareScriber referral insert failed: ${
-        essentialResult.error?.message ||
+      `CareScriber referral update failed: ${
+        compatibleResult.error?.message ||
         completeResult.error?.message ||
         "Unknown Supabase error."
       }`,
     );
   }
 
-  return essentialResult.data as ReferralRecord;
+  return {
+    referral:
+      compatibleResult.data as ReferralRecord,
+    updateMode: "compatible",
+  };
+}
+
+async function insertNewReferral(
+  payload: ReferralRecord,
+): Promise<{
+  referral: ReferralRecord;
+  updateMode: "complete" | "compatible";
+}> {
+  const supabase = getSupabaseAdmin();
+  const now = new Date().toISOString();
+
+  const completePayload =
+    removeUndefinedValues({
+      ...payload,
+      created_at: now,
+    });
+
+  const completeResult =
+    await supabase
+      .from(REFERRAL_TABLE)
+      .insert(completePayload)
+      .select("*")
+      .single();
+
+  if (
+    !completeResult.error &&
+    completeResult.data
+  ) {
+    return {
+      referral:
+        completeResult.data as ReferralRecord,
+      updateMode: "complete",
+    };
+  }
+
+  console.warn(
+    `Complete insert failed for ${payload.referral_code}. ` +
+      "Trying compatible inbox fields.",
+    completeResult.error?.message,
+  );
+
+  const compatiblePayload =
+    buildCompatiblePayload(payload);
+
+  compatiblePayload.created_at =
+    now;
+
+  const compatibleResult =
+    await supabase
+      .from(REFERRAL_TABLE)
+      .insert(compatiblePayload)
+      .select("*")
+      .single();
+
+  if (
+    compatibleResult.error ||
+    !compatibleResult.data
+  ) {
+    throw new Error(
+      `CareScriber referral insert failed: ${
+        compatibleResult.error?.message ||
+        completeResult.error?.message ||
+        "Unknown Supabase error."
+      }`,
+    );
+  }
+
+  return {
+    referral:
+      compatibleResult.data as ReferralRecord,
+    updateMode: "compatible",
+  };
 }
 
 async function releaseReferral(
   payload: ReferralRecord,
-): Promise<{
-  referral: ReferralRecord;
-  created: boolean;
-}> {
+): Promise<ReleaseResult> {
   const referralCode =
     normaliseReferralCode(
       payload.referral_code,
@@ -764,61 +859,79 @@ async function releaseReferral(
     );
 
   if (existingReferral) {
-    const updatedReferral =
+    const result =
       await updateExistingReferral(
         existingReferral,
         payload,
       );
 
     return {
-      referral:
-        updatedReferral,
-      created:
-        false,
+      referral: result.referral,
+      created: false,
+      updateMode: result.updateMode,
     };
   }
 
-  const insertedReferral =
-    await insertNewReferral(
-      payload,
-    );
+  const result =
+    await insertNewReferral(payload);
 
   return {
-    referral:
-      insertedReferral,
-    created:
-      true,
+    referral: result.referral,
+    created: true,
+    updateMode: result.updateMode,
   };
 }
 
 export async function GET() {
-  return NextResponse.json({
-    ok: true,
+  return NextResponse.json(
+    {
+      ok: true,
 
-    service:
-      "CareScriber SymptomAI referral receiver",
+      service:
+        "CareScriber SymptomAI referral receiver",
 
-    configured: {
-      supabaseUrl:
-        Boolean(supabaseUrl),
+      configured: {
+        supabaseUrl:
+          Boolean(supabaseUrl),
 
-      supabaseServiceRoleKey:
-        Boolean(
-          supabaseServiceRoleKey,
-        ),
+        supabaseServiceRoleKey:
+          Boolean(
+            supabaseServiceRoleKey,
+          ),
 
-      careScriberApiSecret:
-        Boolean(
-          careScriberApiSecret,
-        ),
+        careScriberApiSecret:
+          Boolean(
+            careScriberApiSecret,
+          ),
+      },
+
+      table:
+        REFERRAL_TABLE,
+
+      endpoint:
+        "/api/symptomai-referral",
+
+      acceptedMethod:
+        "POST",
+
+      requiredStatuses: {
+        paymentStatus:
+          "paid",
+
+        queueStatus:
+          "waiting",
+
+        referralStatus:
+          "ready_for_doctor",
+      },
     },
-
-    endpoint:
-      "/api/symptomai-referral",
-
-    acceptedMethod:
-      "POST",
-  });
+    {
+      headers: {
+        "Cache-Control":
+          "no-store, no-cache, must-revalidate",
+      },
+    },
+  );
 }
 
 export async function POST(
@@ -832,6 +945,9 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
+          received: false,
+          released: false,
+
           error:
             "CareScriber Supabase server environment variables are missing.",
         },
@@ -848,13 +964,15 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
+          received: false,
+          released: false,
+
           error:
             authentication.error,
         },
         {
-          status: careScriberApiSecret
-            ? 401
-            : 500,
+          status:
+            authentication.status,
         },
       );
     }
@@ -868,6 +986,9 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
+          received: false,
+          released: false,
+
           error:
             "A valid JSON request body is required.",
         },
@@ -887,6 +1008,9 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
+          received: false,
+          released: false,
+
           error:
             "Referral code is required.",
         },
@@ -896,7 +1020,7 @@ export async function POST(
       );
     }
 
-    const paymentStatus =
+    const suppliedPaymentStatus =
       normalisePaymentStatus(
         firstString(
           body,
@@ -908,15 +1032,23 @@ export async function POST(
         ),
       );
 
-    if (paymentStatus !== "paid") {
+    if (
+      suppliedPaymentStatus !== "paid"
+    ) {
       return NextResponse.json(
         {
           success: false,
+          received: true,
+          released: false,
+
           error:
             "Only paid SymptomAI referrals may be released to the doctor inbox.",
 
           referralCode,
-          paymentStatus,
+
+          paymentStatus:
+            suppliedPaymentStatus ||
+            "missing",
         },
         {
           status: 400,
@@ -926,6 +1058,28 @@ export async function POST(
 
     const payload =
       buildReferralPayload(body);
+
+    const validationError =
+      validateReferralPayload(
+        payload,
+      );
+
+    if (validationError) {
+      return NextResponse.json(
+        {
+          success: false,
+          received: true,
+          released: false,
+
+          referralCode,
+          error:
+            validationError,
+        },
+        {
+          status: 400,
+        },
+      );
+    }
 
     console.log(
       "CareScriber received paid SymptomAI referral:",
@@ -959,41 +1113,62 @@ export async function POST(
       result.created
         ? `CareScriber created referral ${referralCode}.`
         : `CareScriber updated referral ${referralCode}.`,
+      {
+        updateMode:
+          result.updateMode,
+
+        referralId:
+          result.referral.id,
+      },
     );
 
-    return NextResponse.json({
-      success: true,
-      received: true,
-      released: true,
+    return NextResponse.json(
+      {
+        success: true,
+        received: true,
+        released: true,
 
-      created:
-        result.created,
+        created:
+          result.created,
 
-      referralCode:
-        result.referral.referral_code ||
-        referralCode,
+        updateMode:
+          result.updateMode,
 
-      referralId:
-        result.referral.id ||
-        null,
+        referralCode:
+          result.referral.referral_code ||
+          referralCode,
 
-      paymentStatus:
-        result.referral.payment_status ||
-        "paid",
+        referralId:
+          result.referral.id ||
+          null,
 
-      queueStatus:
-        result.referral.queue_status ||
-        "waiting",
+        paymentStatus:
+          result.referral.payment_status ||
+          "paid",
 
-      referralStatus:
-        result.referral.referral_status ||
-        "ready_for_doctor",
+        queueStatus:
+          result.referral.queue_status ||
+          "waiting",
 
-      message:
-        result.created
-          ? "Paid SymptomAI referral created and released to the CareScriber doctor inbox."
-          : "Paid SymptomAI referral updated and released to the CareScriber doctor inbox.",
-    });
+        referralStatus:
+          result.referral.referral_status ||
+          "ready_for_doctor",
+
+        message:
+          result.created
+            ? "Paid SymptomAI referral created and released to the CareScriber doctor inbox."
+            : "Paid SymptomAI referral updated and released to the CareScriber doctor inbox.",
+      },
+      {
+        status:
+          result.created ? 201 : 200,
+
+        headers: {
+          "Cache-Control":
+            "no-store, no-cache, must-revalidate",
+        },
+      },
+    );
   } catch (error: unknown) {
     const message =
       error instanceof Error
