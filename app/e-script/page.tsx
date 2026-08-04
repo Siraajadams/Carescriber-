@@ -42,6 +42,13 @@ type Medicine = {
   generic_originator: string;
 };
 
+type ICD10Code = {
+  id: number;
+  code: string;
+  description: string;
+  category: string | null;
+};
+
 type ScriptItem = {
   id: string;
   icdCode: string;
@@ -71,18 +78,7 @@ type DoctorProfile = {
   country: string | null;
 };
 
-const icd10List = [
-  { code: "J01.9", description: "Acute sinusitis, unspecified" },
-  { code: "J06.9", description: "Acute upper respiratory infection, unspecified" },
-  { code: "J02.9", description: "Acute pharyngitis, unspecified" },
-  { code: "J03.9", description: "Acute tonsillitis, unspecified" },
-  { code: "R05", description: "Cough" },
-  { code: "R50.9", description: "Fever, unspecified" },
-  { code: "A09.9", description: "Gastroenteritis and colitis, unspecified" },
-  { code: "N39.0", description: "Urinary tract infection, site not specified" },
-  { code: "M54.5", description: "Low back pain" },
-  { code: "Z76.9", description: "Person encountering health services in unspecified circumstances" },
-];
+
 
 const forms = ["Cap", "Crm", "Oint", "Pess", "Pump", "Spray", "Supp", "Tab", "Unit(s)", "Vial", "Syrup", "Not Applicable"];
 const frequencies = ["OD", "BD", "TDS", "QID", "Before meals", "After meals", "Morning", "Lunch time", "Evening", "Use as directed", "Use as required"];
@@ -211,6 +207,7 @@ function blobToBase64(blob: Blob) {
 
 export default function EScriptPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const icdSearchTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [linkedPatientId, setLinkedPatientId] = useState<string | null>(null);
   const [pageInitialised, setPageInitialised] = useState(false);
   const [drawing, setDrawing] = useState(false);
@@ -241,6 +238,8 @@ export default function EScriptPage() {
   const [emailing, setEmailing] = useState(false);
   const [savingPrescription, setSavingPrescription] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState("");
+  const [icdSearchResults, setIcdSearchResults] = useState<Record<string, ICD10Code[]>>({});
+  const [icdSearchLoading, setIcdSearchLoading] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -654,10 +653,95 @@ export default function EScriptPage() {
       .map((r) => r.medicine);
   }
 
-  function icdResults(item: ScriptItem) {
-    const q = item.icdCode.trim().toLowerCase();
-    if (!q) return [];
-    return icd10List.filter((i) => `${i.code} ${i.description}`.toLowerCase().includes(q));
+  function clearIcdSearch(itemId: string) {
+    setIcdSearchResults((current) => ({
+      ...current,
+      [itemId]: [],
+    }));
+    setIcdSearchLoading((current) => ({
+      ...current,
+      [itemId]: false,
+    }));
+  }
+
+  async function searchIcd10(itemId: string, query: string) {
+    const cleanQuery = query
+      .trim()
+      .replace(/[%_,()]/g, " ")
+      .replace(/\s+/g, " ");
+
+    if (cleanQuery.length < 2) {
+      clearIcdSearch(itemId);
+      return;
+    }
+
+    setIcdSearchLoading((current) => ({
+      ...current,
+      [itemId]: true,
+    }));
+
+    const { data, error } = await supabase
+      .from("icd10_codes")
+      .select("id, code, description, category")
+      .eq("active", true)
+      .or(
+        `code.ilike.%${cleanQuery}%,description.ilike.%${cleanQuery}%`
+      )
+      .order("code")
+      .limit(20);
+
+    if (error) {
+      console.error("ICD-10 search error:", error);
+      setIcdSearchResults((current) => ({
+        ...current,
+        [itemId]: [],
+      }));
+      setMessage(
+        "ICD-10 search failed. Confirm the icd10_codes table and read policy are configured: " +
+          error.message
+      );
+    } else {
+      setIcdSearchResults((current) => ({
+        ...current,
+        [itemId]: (data || []) as ICD10Code[],
+      }));
+    }
+
+    setIcdSearchLoading((current) => ({
+      ...current,
+      [itemId]: false,
+    }));
+  }
+
+  function handleIcdSearchChange(itemId: string, value: string) {
+    updateItem(itemId, {
+      icdCode: value,
+      icdDescription: "",
+    });
+
+    const existingTimer = icdSearchTimersRef.current[itemId];
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    if (value.trim().length < 2) {
+      clearIcdSearch(itemId);
+      return;
+    }
+
+    icdSearchTimersRef.current[itemId] = setTimeout(() => {
+      void searchIcd10(itemId, value);
+    }, 300);
+  }
+
+  function selectIcd10(itemId: string, icd: ICD10Code) {
+    updateItem(itemId, {
+      icdCode: icd.code,
+      icdDescription: icd.description,
+    });
+
+    clearIcdSearch(itemId);
   }
 
   function updateItem(id: string, patch: Partial<ScriptItem>) {
@@ -669,6 +753,25 @@ export default function EScriptPage() {
   }
 
   function removeItem(id: string) {
+    const existingTimer = icdSearchTimersRef.current[id];
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      delete icdSearchTimersRef.current[id];
+    }
+
+    setIcdSearchResults((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+
+    setIcdSearchLoading((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+
     setItems((old) => old.length === 1 ? old : old.filter((i) => i.id !== id));
   }
 
@@ -997,6 +1100,17 @@ export default function EScriptPage() {
       return false;
     }
 
+    const itemWithoutSelectedIcd = validItems.find(
+      (item) => !item.icdCode.trim() || !item.icdDescription.trim()
+    );
+
+    if (itemWithoutSelectedIcd) {
+      setMessage(
+        "Please search for and select a valid ICD-10 diagnosis from the results for every prescribed medicine."
+      );
+      return false;
+    }
+
     if (!doctorName.trim() || doctorName.trim().toLowerCase() === "dr") {
       setMessage("Please complete the doctor's full name.");
       return false;
@@ -1298,9 +1412,68 @@ https://carescriber.com`,
         {items.map((item, index) => (
           <div key={item.id} style={styles.rxCard}>
             <div style={styles.rxHeader}><b>Medicine {index + 1}</b><button style={styles.removeButton} onClick={() => removeItem(item.id)}>Remove</button></div>
-            <label style={styles.label}>ICD</label>
-            <input style={styles.input} value={item.icdCode} placeholder="Type ICD code or description" onChange={(e) => updateItem(item.id, { icdCode: e.target.value, icdDescription: "" })} />
-            {icdResults(item).length > 0 && <div style={styles.resultBox}>{icdResults(item).map((icd) => <button key={icd.code} style={styles.resultItem} onClick={() => updateItem(item.id, { icdCode: icd.code, icdDescription: icd.description })}>{icd.code} | {icd.description}</button>)}</div>}
+            <label style={styles.label}>Diagnosis / ICD-10</label>
+            <input
+              style={styles.input}
+              value={
+                item.icdDescription
+                  ? `${item.icdCode} — ${item.icdDescription}`
+                  : item.icdCode
+              }
+              placeholder="Search by ICD-10 code or diagnosis"
+              onChange={(e) => handleIcdSearchChange(item.id, e.target.value)}
+              autoComplete="off"
+            />
+
+            {icdSearchLoading[item.id] && (
+              <div style={styles.searchStatus}>Searching ICD-10 codes...</div>
+            )}
+
+            {!icdSearchLoading[item.id] &&
+              !item.icdDescription &&
+              item.icdCode.trim().length >= 2 &&
+              (icdSearchResults[item.id] || []).length === 0 && (
+                <div style={styles.searchStatus}>
+                  No matching ICD-10 code found. Try another code or diagnosis.
+                </div>
+              )}
+
+            {(icdSearchResults[item.id] || []).length > 0 &&
+              !item.icdDescription && (
+                <div style={styles.resultBox}>
+                  {(icdSearchResults[item.id] || []).map((icd) => (
+                    <button
+                      key={icd.id}
+                      type="button"
+                      style={styles.resultItem}
+                      onClick={() => selectIcd10(item.id, icd)}
+                    >
+                      <b>{icd.code}</b> | {icd.description}
+                      {icd.category ? ` · ${icd.category}` : ""}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+            {item.icdDescription && (
+              <div style={styles.icdSelected}>
+                Selected ICD-10: <b>{item.icdCode}</b> —{" "}
+                {item.icdDescription}
+                <button
+                  type="button"
+                  style={styles.clearIcdButton}
+                  onClick={() => {
+                    updateItem(item.id, {
+                      icdCode: "",
+                      icdDescription: "",
+                    });
+                    clearIcdSearch(item.id);
+                  }}
+                >
+                  Change
+                </button>
+              </div>
+            )}
 
             <label style={styles.label}>Medication</label>
             <input style={styles.input} value={item.medicineQuery} placeholder="Type medicine name, active ingredient or NAPPI" onChange={(e) => updateItem(item.id, { medicineQuery: e.target.value, medicine: undefined })} />
@@ -1432,6 +1605,9 @@ const styles: Record<string, CSSProperties> = {
   resultBox: { border: "1px solid #cbd5e1", borderRadius: 16, marginTop: 8, overflow: "hidden", background: "#fff", maxHeight: 260, overflowY: "auto" },
   resultItem: { display: "block", width: "100%", textAlign: "left", border: 0, borderBottom: "1px solid #e2e8f0", background: "#fff", padding: 14, fontSize: 15 },
   medSelected: { marginTop: 12, background: "#ecfdf5", color: "#166534", padding: 14, borderRadius: 14, fontWeight: 800 },
+  icdSelected: { marginTop: 12, background: "#eff6ff", color: "#1e40af", padding: 14, borderRadius: 14, fontWeight: 800, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  clearIcdButton: { marginLeft: "auto", border: 0, borderRadius: 10, padding: "8px 11px", background: "#1d4ed8", color: "#fff", fontWeight: 900, cursor: "pointer" },
+  searchStatus: { marginTop: 8, padding: 12, borderRadius: 12, background: "#f8fafc", color: "#475569", fontWeight: 700 },
   lightButton: { width: "100%", border: 0, borderRadius: 18, padding: 16, background: "#dbeafe", color: "#1d4ed8", fontWeight: 900, fontSize: 18, marginTop: 14 },
   primaryButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#2563eb", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 18 },
   pdfButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#0f172a", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 14 },
