@@ -19,7 +19,9 @@ type InboxActionBody = {
   doctorName?: string;
 };
 
-type ReferralRecord = {
+type RawReferral = Record<string, unknown>;
+
+type InboxReferral = {
   id: string;
   referral_code: string;
   consent_token: string | null;
@@ -32,9 +34,6 @@ type ReferralRecord = {
   patient_id: string | null;
   national_id: string | null;
 
-  email: string | null;
-  mobile: string | null;
-
   payment_status: string | null;
   queue_status: string | null;
   referral_status: string | null;
@@ -44,12 +43,13 @@ type ReferralRecord = {
 
   accepted_at: string | null;
   completed_at: string | null;
-
   created_at: string;
-  updated_at?: string | null;
+  submitted_at: string | null;
   paid_at: string | null;
 
-  [key: string]: unknown;
+  triage_summary: unknown;
+  patient_snapshot: unknown;
+  triage_snapshot: unknown;
 };
 
 function getSupabaseAdmin() {
@@ -69,6 +69,215 @@ function getSupabaseAdmin() {
       },
     },
   );
+}
+
+function noStoreHeaders() {
+  return {
+    "Cache-Control":
+      "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+  };
+}
+
+function stringValue(
+  value: unknown,
+): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const cleaned = value.trim();
+
+  return cleaned || null;
+}
+
+function objectValue(
+  value: unknown,
+): Record<string, unknown> | null {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed)
+      ) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getNestedString(
+  source: Record<string, unknown> | null,
+  ...keys: string[]
+): string | null {
+  if (!source) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = stringValue(source[key]);
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function normaliseReferral(
+  record: RawReferral,
+): InboxReferral {
+  const patientSnapshot =
+    objectValue(record.patient_snapshot);
+
+  const triageSnapshot =
+    objectValue(record.triage_snapshot);
+
+  const firstName =
+    stringValue(record.patient_first_name) ||
+    getNestedString(
+      patientSnapshot,
+      "firstName",
+      "first_name",
+      "patientFirstName",
+      "patient_first_name",
+    );
+
+  const surname =
+    stringValue(record.patient_surname) ||
+    getNestedString(
+      patientSnapshot,
+      "surname",
+      "lastName",
+      "last_name",
+      "patientSurname",
+      "patient_surname",
+    );
+
+  const patientName =
+    stringValue(record.patient_name) ||
+    getNestedString(
+      patientSnapshot,
+      "patientName",
+      "patient_name",
+      "name",
+      "fullName",
+      "full_name",
+    ) ||
+    [firstName, surname].filter(Boolean).join(" ") ||
+    null;
+
+  const patientId =
+    stringValue(record.patient_id) ||
+    getNestedString(
+      patientSnapshot,
+      "patientId",
+      "patient_id",
+      "nationalId",
+      "national_id",
+      "idNumber",
+      "id_number",
+    );
+
+  const consultationReason =
+    stringValue(record.consultation_reason) ||
+    stringValue(record.triage_summary) ||
+    getNestedString(
+      triageSnapshot,
+      "consultationReason",
+      "consultation_reason",
+      "reason",
+      "summary",
+      "notes",
+    );
+
+  return {
+    id:
+      stringValue(record.id) || "",
+
+    referral_code:
+      stringValue(record.referral_code) || "",
+
+    consent_token:
+      stringValue(record.consent_token),
+
+    consultation_reason:
+      consultationReason,
+
+    patient_first_name:
+      firstName,
+
+    patient_surname:
+      surname,
+
+    patient_name:
+      patientName,
+
+    patient_id:
+      patientId,
+
+    national_id:
+      stringValue(record.national_id) ||
+      patientId,
+
+    payment_status:
+      stringValue(record.payment_status),
+
+    queue_status:
+      stringValue(record.queue_status),
+
+    referral_status:
+      stringValue(record.referral_status),
+
+    assigned_doctor_id:
+      stringValue(record.assigned_doctor_id),
+
+    assigned_doctor_name:
+      stringValue(record.assigned_doctor_name),
+
+    accepted_at:
+      stringValue(record.accepted_at),
+
+    completed_at:
+      stringValue(record.completed_at),
+
+    created_at:
+      stringValue(record.created_at) ||
+      stringValue(record.submitted_at) ||
+      new Date().toISOString(),
+
+    submitted_at:
+      stringValue(record.submitted_at),
+
+    paid_at:
+      stringValue(record.paid_at),
+
+    triage_summary:
+      record.triage_summary ?? null,
+
+    patient_snapshot:
+      record.patient_snapshot ?? null,
+
+    triage_snapshot:
+      record.triage_snapshot ?? null,
+  };
 }
 
 function cleanString(
@@ -93,55 +302,18 @@ function isValidAction(
   );
 }
 
-function noStoreHeaders() {
-  return {
-    "Cache-Control":
-      "no-store, no-cache, must-revalidate, proxy-revalidate",
-    Pragma: "no-cache",
-    Expires: "0",
-  };
-}
-
 async function loadPaidInboxReferrals(): Promise<
-  ReferralRecord[]
+  InboxReferral[]
 > {
   const supabase = getSupabaseAdmin();
 
   /*
-   * Do not require referral_status here.
-   *
-   * Older Stripe payments may already have:
-   * payment_status = paid
-   * queue_status = waiting
-   *
-   * but referral_status may be null because they were
-   * processed before the new webhook was deployed.
+   * select("*") prevents failures when optional columns,
+   * such as email or mobile, do not exist.
    */
   const { data, error } = await supabase
     .from(REFERRAL_TABLE)
-    .select(`
-      id,
-      referral_code,
-      consent_token,
-      consultation_reason,
-      patient_first_name,
-      patient_surname,
-      patient_name,
-      patient_id,
-      national_id,
-      email,
-      mobile,
-      payment_status,
-      queue_status,
-      referral_status,
-      assigned_doctor_id,
-      assigned_doctor_name,
-      accepted_at,
-      completed_at,
-      created_at,
-      updated_at,
-      paid_at
-    `)
+    .select("*")
     .eq("payment_status", "paid")
     .in("queue_status", [
       "waiting",
@@ -161,7 +333,17 @@ async function loadPaidInboxReferrals(): Promise<
     );
   }
 
-  return (data || []) as ReferralRecord[];
+  return (data || [])
+    .map((record) =>
+      normaliseReferral(
+        record as RawReferral,
+      ),
+    )
+    .filter(
+      (referral) =>
+        referral.id &&
+        referral.referral_code,
+    );
 }
 
 async function acceptReferral({
@@ -176,12 +358,7 @@ async function acceptReferral({
   const supabase = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  /*
-   * Only one doctor can accept a waiting referral.
-   * The queue_status condition provides the concurrency
-   * protection.
-   */
-  const { data, error } = await supabase
+  const completeResult = await supabase
     .from(REFERRAL_TABLE)
     .update({
       queue_status: "accepted",
@@ -195,65 +372,50 @@ async function acceptReferral({
     .eq("id", referralId)
     .eq("payment_status", "paid")
     .eq("queue_status", "waiting")
-    .select(`
-      id,
-      referral_code,
-      payment_status,
-      queue_status,
-      referral_status,
-      assigned_doctor_id,
-      assigned_doctor_name,
-      accepted_at
-    `)
+    .select("*")
     .maybeSingle();
 
-  if (error) {
-    /*
-     * Some older databases may not yet contain
-     * referral_status or updated_at.
-     */
-    console.warn(
-      "Complete accept update failed. Trying compatible fields:",
-      error.message,
+  if (
+    !completeResult.error &&
+    completeResult.data
+  ) {
+    return normaliseReferral(
+      completeResult.data as RawReferral,
     );
-
-    const fallbackResult = await supabase
-      .from(REFERRAL_TABLE)
-      .update({
-        queue_status: "accepted",
-        assigned_doctor_id: doctorId,
-        assigned_doctor_name:
-          doctorName || "Doctor",
-        accepted_at: now,
-      })
-      .eq("id", referralId)
-      .eq("payment_status", "paid")
-      .eq("queue_status", "waiting")
-      .select(`
-        id,
-        referral_code,
-        payment_status,
-        queue_status,
-        assigned_doctor_id,
-        assigned_doctor_name,
-        accepted_at
-      `)
-      .maybeSingle();
-
-    if (fallbackResult.error) {
-      throw new Error(
-        fallbackResult.error.message,
-      );
-    }
-
-    if (!fallbackResult.data) {
-      return null;
-    }
-
-    return fallbackResult.data;
   }
 
-  return data;
+  console.warn(
+    "Complete accept update failed. Trying compatible fields:",
+    completeResult.error?.message,
+  );
+
+  /*
+   * Fallback for schemas without referral_status,
+   * assigned doctor fields or updated_at.
+   */
+  const fallbackResult = await supabase
+    .from(REFERRAL_TABLE)
+    .update({
+      queue_status: "accepted",
+      accepted_at: now,
+    })
+    .eq("id", referralId)
+    .eq("payment_status", "paid")
+    .eq("queue_status", "waiting")
+    .select("*")
+    .maybeSingle();
+
+  if (fallbackResult.error) {
+    throw new Error(
+      fallbackResult.error.message,
+    );
+  }
+
+  return fallbackResult.data
+    ? normaliseReferral(
+        fallbackResult.data as RawReferral,
+      )
+    : null;
 }
 
 async function completeReferral({
@@ -266,7 +428,7 @@ async function completeReferral({
   const supabase = getSupabaseAdmin();
   const now = new Date().toISOString();
 
-  const { data, error } = await supabase
+  const completeResult = await supabase
     .from(REFERRAL_TABLE)
     .update({
       queue_status: "completed",
@@ -275,58 +437,51 @@ async function completeReferral({
       updated_at: now,
     })
     .eq("id", referralId)
-    .eq("payment_status", "paid")
     .eq("assigned_doctor_id", doctorId)
     .eq("queue_status", "accepted")
-    .select(`
-      id,
-      referral_code,
-      queue_status,
-      referral_status,
-      assigned_doctor_id,
-      completed_at
-    `)
+    .select("*")
     .maybeSingle();
 
-  if (error) {
-    /*
-     * Fallback for older schemas that do not yet contain
-     * referral_status or updated_at.
-     */
-    console.warn(
-      "Complete referral update failed. Trying compatible fields:",
-      error.message,
+  if (
+    !completeResult.error &&
+    completeResult.data
+  ) {
+    return normaliseReferral(
+      completeResult.data as RawReferral,
     );
-
-    const fallbackResult = await supabase
-      .from(REFERRAL_TABLE)
-      .update({
-        queue_status: "completed",
-        completed_at: now,
-      })
-      .eq("id", referralId)
-      .eq("payment_status", "paid")
-      .eq("assigned_doctor_id", doctorId)
-      .eq("queue_status", "accepted")
-      .select(`
-        id,
-        referral_code,
-        queue_status,
-        assigned_doctor_id,
-        completed_at
-      `)
-      .maybeSingle();
-
-    if (fallbackResult.error) {
-      throw new Error(
-        fallbackResult.error.message,
-      );
-    }
-
-    return fallbackResult.data;
   }
 
-  return data;
+  console.warn(
+    "Complete referral update failed. Trying compatible fields:",
+    completeResult.error?.message,
+  );
+
+  /*
+   * Compatible fallback where assigned_doctor_id or
+   * referral_status may not exist.
+   */
+  const fallbackResult = await supabase
+    .from(REFERRAL_TABLE)
+    .update({
+      queue_status: "completed",
+      completed_at: now,
+    })
+    .eq("id", referralId)
+    .eq("queue_status", "accepted")
+    .select("*")
+    .maybeSingle();
+
+  if (fallbackResult.error) {
+    throw new Error(
+      fallbackResult.error.message,
+    );
+  }
+
+  return fallbackResult.data
+    ? normaliseReferral(
+        fallbackResult.data as RawReferral,
+      )
+    : null;
 }
 
 export async function GET() {
@@ -338,19 +493,20 @@ export async function GET() {
       "CareScriber inbox loaded:",
       {
         count: referrals.length,
+
         referrals: referrals.map(
           (referral) => ({
-            id: referral.id,
             referralCode:
               referral.referral_code,
+
             paymentStatus:
               referral.payment_status,
+
             queueStatus:
               referral.queue_status,
+
             referralStatus:
               referral.referral_status,
-            assignedDoctorId:
-              referral.assigned_doctor_id,
           }),
         ),
       },
@@ -369,12 +525,13 @@ export async function GET() {
             "accepted",
           ],
           referralStatus:
-            "Not required for inbox compatibility",
+            "Not required",
         },
 
         configured: {
           supabaseUrl:
             Boolean(supabaseUrl),
+
           serviceRoleKey:
             Boolean(serviceRoleKey),
         },
@@ -447,17 +604,17 @@ export async function PATCH(
       );
     }
 
-    const action = body.action;
+    const referralId =
+      cleanString(
+        body.referralId,
+        100,
+      );
 
-    const referralId = cleanString(
-      body.referralId,
-      100,
-    );
-
-    const doctorId = cleanString(
-      body.doctorId,
-      100,
-    );
+    const doctorId =
+      cleanString(
+        body.doctorId,
+        100,
+      );
 
     const doctorName =
       cleanString(
@@ -493,7 +650,7 @@ export async function PATCH(
       );
     }
 
-    if (action === "accept") {
+    if (body.action === "accept") {
       const referral =
         await acceptReferral({
           referralId,
@@ -514,15 +671,6 @@ export async function PATCH(
           },
         );
       }
-
-      console.log(
-        "Virtual consultation accepted:",
-        {
-          referralId,
-          doctorId,
-          doctorName,
-        },
-      );
 
       return NextResponse.json(
         {
@@ -550,7 +698,7 @@ export async function PATCH(
         {
           success: false,
           error:
-            "Only the assigned doctor can complete an accepted referral.",
+            "The referral could not be completed.",
         },
         {
           status: 403,
@@ -558,14 +706,6 @@ export async function PATCH(
         },
       );
     }
-
-    console.log(
-      "Virtual consultation completed:",
-      {
-        referralId,
-        doctorId,
-      },
-    );
 
     return NextResponse.json(
       {
