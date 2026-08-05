@@ -150,32 +150,57 @@ export default function ConsultationPage() {
     /WhatsApp|FBAN|FBAV|Instagram/i.test(navigator.userAgent);
 
   useEffect(() => {
-    loadPatients();
-    loadRecent();
-    loadPatientFromUrl();
+    void loadPatients();
+    void loadRecent();
+    void initialiseConsultationFromUrl();
   }, []);
 
-  async function loadPatientFromUrl() {
+  async function initialiseConsultationFromUrl() {
     if (typeof window === "undefined") return;
 
     const params = new URLSearchParams(window.location.search);
-    const patientId = params.get("patient") || params.get("patientId");
 
-    if (!patientId) return;
+    const patientId =
+      params.get("patient") ||
+      params.get("patientId");
 
-    const { data, error } = await supabase
-      .from("patients")
-      .select("*")
-      .eq("id", patientId)
-      .limit(1);
+    const code =
+      params.get("referralCode") ||
+      params.get("code") ||
+      "";
 
-    if (error) {
-      setMessage("Patient load error: " + error.message);
-      return;
+    const token =
+      params.get("consentToken") ||
+      params.get("token") ||
+      "";
+
+    if (patientId) {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", patientId)
+        .limit(1);
+
+      if (error) {
+        setMessage("Patient load error: " + error.message);
+      } else if (data && data.length > 0) {
+        selectPatient(mapPatient(data[0]));
+      }
     }
 
-    if (data && data.length > 0) {
-      selectPatient(mapPatient(data[0]));
+    if (code) {
+      setReferralCode(code.toUpperCase());
+    }
+
+    if (token) {
+      setConsentToken(token);
+    }
+
+    if (code && token) {
+      await unlockSymptomAIReferral(
+        code.toUpperCase(),
+        token,
+      );
     }
   }
 
@@ -271,13 +296,33 @@ export default function ConsultationPage() {
     }
   }
 
-  async function unlockSymptomAIReferral() {
+  async function unlockSymptomAIReferral(
+    referralCodeOverride?: string,
+    consentTokenOverride?: string,
+  ) {
     setMessage("");
     setReferralNote("");
     setReferralLoading(true);
 
-    const code = referralCode.trim().toUpperCase();
-    const token = consentToken.trim();
+    const code = (
+      referralCodeOverride ??
+      referralCode
+    )
+      .trim()
+      .toUpperCase();
+
+    const token = (
+      consentTokenOverride ??
+      consentToken
+    ).trim();
+
+    if (code) {
+      setReferralCode(code);
+    }
+
+    if (token) {
+      setConsentToken(token);
+    }
 
     if (!code || !token) {
       setReferralLoading(false);
@@ -644,6 +689,7 @@ REFERRAL / PRESCRIPTION
 
         <div style={styles.tabRow}>
           <Link href="/dashboard" style={styles.tab}>Dashboard</Link>
+          <Link href="/inbox" style={styles.tab}>Virtual Consult Inbox</Link>
           <Link href="/patients" style={styles.tab}>Patients</Link>
           <Link href="/consultation" style={styles.activeTab}>Consultation</Link>
           <Link href="/sick-note" style={styles.sickTab}>Sick Note</Link>
@@ -685,7 +731,7 @@ REFERRAL / PRESCRIPTION
 
         <button
           style={styles.primaryButton}
-          onClick={unlockSymptomAIReferral}
+          onClick={() => void unlockSymptomAIReferral()}
           disabled={referralLoading}
         >
           {referralLoading ? "Unlocking Referral..." : "Unlock Referral"}
@@ -696,7 +742,7 @@ REFERRAL / PRESCRIPTION
         {referral && (
           <div style={styles.selected}>
             SymptomAI referral unlocked: {referral.referral_code} · Status:{" "}
-            {referral.status || "Pending"}
+            {referral.status || "Ready for consultation"}
           </div>
         )}
 
