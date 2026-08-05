@@ -246,19 +246,26 @@ export default function InboxPage() {
       new URLSearchParams();
 
     params.set(
-      "code",
+      "referralCode",
       referral.referral_code,
     );
 
     if (referral.consent_token) {
       params.set(
-        "token",
+        "consentToken",
         referral.consent_token,
       );
     }
 
+    if (referral.patient_id) {
+      params.set(
+        "patientId",
+        referral.patient_id,
+      );
+    }
+
     router.push(
-      `/referral?${params.toString()}`,
+      `/consultation?${params.toString()}`,
     );
   }
 
@@ -631,7 +638,7 @@ export default function InboxPage() {
                             )
                           }
                         >
-                          Open patient
+                          Open consultation
                         </button>
 
                         <button
