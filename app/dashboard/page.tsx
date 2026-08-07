@@ -15,6 +15,28 @@ type DoctorProfile = {
   practice_number?: string | null;
 };
 
+
+type InboxReferral = {
+  id: string;
+  referral_code?: string | null;
+  consultation_reason?: string | null;
+  payment_status?: string | null;
+  queue_status?: string | null;
+  referral_status?: string | null;
+  patient_first_name?: string | null;
+  patient_surname?: string | null;
+  patient_name?: string | null;
+  paid_at?: string | null;
+  created_at?: string | null;
+};
+
+type InboxResponse = {
+  success?: boolean;
+  count?: number;
+  referrals?: InboxReferral[];
+  error?: string;
+};
+
 export default function DashboardPage() {
   const router = useRouter();
 
@@ -22,6 +44,50 @@ export default function DashboardPage() {
   const [profileSummary, setProfileSummary] = useState("");
   const [loading, setLoading] = useState(true);
   const [waitingReferralCount, setWaitingReferralCount] = useState(0);
+  const [oldestWaitingReferral, setOldestWaitingReferral] =
+    useState<InboxReferral | null>(null);
+  const [inboxError, setInboxError] = useState("");
+
+  async function loadInboxSummary() {
+    try {
+      setInboxError("");
+
+      const response = await fetch("/api/inbox-referrals", {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      const payload =
+        (await response.json().catch(() => ({}))) as InboxResponse;
+
+      if (!response.ok || payload.success === false) {
+        throw new Error(
+          payload.error || "Could not load the virtual consult inbox.",
+        );
+      }
+
+      const waiting = (payload.referrals || []).filter(
+        (referral) =>
+          referral.payment_status === "paid" &&
+          referral.queue_status === "waiting",
+      );
+
+      setWaitingReferralCount(waiting.length);
+      setOldestWaitingReferral(waiting[0] || null);
+    } catch (error: unknown) {
+      console.error("Could not load inbox summary:", error);
+      setWaitingReferralCount(0);
+      setOldestWaitingReferral(null);
+      setInboxError(
+        error instanceof Error
+          ? error.message
+          : "Could not load the virtual consult inbox.",
+      );
+    }
+  }
 
   useEffect(() => {
     async function checkLogin() {
@@ -110,20 +176,7 @@ export default function DashboardPage() {
 
         setProfileSummary(summaryParts.join(" • "));
 
-        const { count, error: countError } = await supabase
-          .from("symptomai_referrals")
-          .select("id", {
-            count: "exact",
-            head: true,
-          })
-          .eq("payment_status", "paid")
-          .eq("queue_status", "waiting");
-
-        if (countError) {
-          console.error("Could not load inbox count:", countError);
-        } else {
-          setWaitingReferralCount(count || 0);
-        }
+        await loadInboxSummary();
       } catch (error) {
         console.error("Dashboard profile error:", error);
       } finally {
@@ -133,6 +186,16 @@ export default function DashboardPage() {
 
     void checkLogin();
   }, [router]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadInboxSummary();
+    }, 30_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 
   async function logout() {
     await supabase.auth.signOut();
@@ -187,15 +250,42 @@ export default function DashboardPage() {
               request and open the linked patient file.
             </p>
 
-            <div style={styles.inboxStatus}>
-              {waitingReferralCount === 0
-                ? "No paid referrals currently waiting"
-                : `${waitingReferralCount} paid ${
-                    waitingReferralCount === 1
-                      ? "referral"
-                      : "referrals"
-                  } waiting`}
-            </div>
+            {inboxError ? (
+              <div style={styles.inboxError}>
+                Inbox status unavailable: {inboxError}
+              </div>
+            ) : (
+              <>
+                <div style={styles.inboxStatus}>
+                  {waitingReferralCount === 0
+                    ? "No paid referrals currently waiting"
+                    : `${waitingReferralCount} paid ${
+                        waitingReferralCount === 1
+                          ? "referral"
+                          : "referrals"
+                      } waiting`}
+                </div>
+
+                {oldestWaitingReferral && (
+                  <div style={styles.oldestReferral}>
+                    <div style={styles.oldestReferralLabel}>
+                      Oldest waiting referral
+                    </div>
+
+                    <div style={styles.oldestReferralCode}>
+                      {oldestWaitingReferral.referral_code ||
+                        "Referral code unavailable"}
+                    </div>
+
+                    <div style={styles.oldestReferralReason}>
+                      <b>Reason:</b>{" "}
+                      {oldestWaitingReferral.consultation_reason ||
+                        "No consultation reason recorded"}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </Link>
 
           <Link
@@ -412,6 +502,43 @@ const styles: {
     background: "rgba(255, 255, 255, 0.16)",
     fontSize: 15,
     fontWeight: 700,
+  },
+
+  inboxError: {
+    marginTop: 16,
+    padding: "10px 12px",
+    borderRadius: 12,
+    background: "rgba(254, 226, 226, 0.95)",
+    color: "#991b1b",
+    fontSize: 14,
+    fontWeight: 700,
+  },
+
+  oldestReferral: {
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 14,
+    background: "rgba(255, 255, 255, 0.13)",
+  },
+
+  oldestReferralLabel: {
+    fontSize: 12,
+    fontWeight: 800,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    opacity: 0.85,
+  },
+
+  oldestReferralCode: {
+    marginTop: 6,
+    fontSize: 18,
+    fontWeight: 800,
+  },
+
+  oldestReferralReason: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 1.45,
   },
 
   primaryCard: {
