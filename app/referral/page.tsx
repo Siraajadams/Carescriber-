@@ -17,7 +17,11 @@ type Patient = {
   dob?: string | null;
   gender?: string | null;
   mobile?: string | null;
+  phone?: string | null;
   email?: string | null;
+  medical_aid?: string | null;
+  allergies?: string | null;
+  current_medicines?: string | null;
 };
 
 type DoctorProfile = {
@@ -27,6 +31,7 @@ type DoctorProfile = {
   name?: string | null;
   full_name?: string | null;
   qualifications?: string | null;
+  hpcsa?: string | null;
   hpcsa_number?: string | null;
   registration_number?: string | null;
   practice_number?: string | null;
@@ -42,17 +47,57 @@ type Icd10 = {
   description: string;
 };
 
+type ReferralAttachment = {
+  id?: string;
+  file_name: string;
+  storage_path: string;
+  mime_type?: string | null;
+  file_size?: number | null;
+  signed_url?: string | null;
+};
+
+const COMMON_ALLERGIES = [
+  "No known allergies",
+  "Penicillin",
+  "Aspirin",
+  "Sulfonamides",
+  "Cephalosporins",
+  "NSAIDs",
+  "Codeine",
+  "Latex",
+  "Other",
+];
+
 function clean(value?: string | null) {
   return (value || "").trim();
 }
 
+function mapPatient(row: any): Patient {
+  return {
+    id: row.id,
+    first_name: row.first_name || row.name || "",
+    surname: row.surname || row.last_name || "",
+    last_name: row.last_name || row.surname || "",
+    name: row.name || "",
+    patient_id: row.patient_id || row.id_number || row.national_id || "",
+    id_number: row.id_number || row.patient_id || row.national_id || "",
+    national_id: row.national_id || row.id_number || row.patient_id || "",
+    date_of_birth: row.date_of_birth || row.dob || null,
+    dob: row.dob || row.date_of_birth || null,
+    gender: row.gender || "",
+    mobile: row.mobile || row.phone || row.mobile_number || "",
+    phone: row.phone || row.mobile || row.mobile_number || "",
+    email: row.email || "",
+    medical_aid: row.medical_aid || "",
+    allergies: row.allergies || "",
+    current_medicines: row.current_medicines || "",
+  };
+}
+
 function patientName(patient?: Patient | null) {
   if (!patient) return "";
-
   return (
-    `${clean(patient.first_name)} ${clean(
-      patient.surname || patient.last_name,
-    )}`.trim() ||
+    `${clean(patient.first_name)} ${clean(patient.surname || patient.last_name)}`.trim() ||
     clean(patient.name) ||
     "Patient"
   );
@@ -60,27 +105,21 @@ function patientName(patient?: Patient | null) {
 
 function patientIdentifier(patient?: Patient | null) {
   if (!patient) return "";
-
-  return (
-    clean(patient.id_number) ||
-    clean(patient.patient_id) ||
-    clean(patient.national_id)
-  );
+  return clean(patient.id_number) || clean(patient.patient_id) || clean(patient.national_id);
 }
 
 function patientDob(patient?: Patient | null) {
   return clean(patient?.date_of_birth) || clean(patient?.dob);
 }
 
+function patientMobile(patient?: Patient | null) {
+  return clean(patient?.mobile) || clean(patient?.phone);
+}
+
 function formatDateZA(value?: string | null) {
   if (!value) return "";
-
   const date = new Date(`${value}T12:00:00`);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("en-ZA", {
     day: "2-digit",
     month: "long",
@@ -90,17 +129,11 @@ function formatDateZA(value?: string | null) {
 
 function calculateAge(value?: string | null) {
   if (!value) return "";
-
   const dob = new Date(`${value}T12:00:00`);
-
-  if (Number.isNaN(dob.getTime())) {
-    return "";
-  }
+  if (Number.isNaN(dob.getTime())) return "";
 
   const today = new Date();
-
   let age = today.getFullYear() - dob.getFullYear();
-
   const monthDifference = today.getMonth() - dob.getMonth();
 
   if (
@@ -115,13 +148,10 @@ function calculateAge(value?: string | null) {
 
 function generateReferralNumber() {
   const date = new Date();
-
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-
   const randomPart = crypto.randomUUID().slice(0, 8).toUpperCase();
-
   return `REF-${year}${month}${day}-${randomPart}`;
 }
 
@@ -134,12 +164,16 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+function normaliseId(value: string) {
+  return value.trim().replace(/\s+/g, "").toUpperCase();
+}
+
 export default function ReferralPage() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-
   const [patientSearch, setPatientSearch] = useState("");
   const [patientLoading, setPatientLoading] = useState(true);
+  const [patientSearching, setPatientSearching] = useState(false);
 
   const [doctor, setDoctor] = useState<DoctorProfile | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(true);
@@ -151,34 +185,37 @@ export default function ReferralPage() {
   const [recipientPhone, setRecipientPhone] = useState("");
 
   const [urgency, setUrgency] = useState("Routine");
-
   const [reason, setReason] = useState("");
   const [clinicalSummary, setClinicalSummary] = useState("");
   const [examinationFindings, setExaminationFindings] = useState("");
   const [medicalHistory, setMedicalHistory] = useState("");
   const [currentMedication, setCurrentMedication] = useState("");
-  const [allergies, setAllergies] = useState("");
   const [investigations, setInvestigations] = useState("");
   const [managementToDate, setManagementToDate] = useState("");
   const [referralRequest, setReferralRequest] = useState("");
   const [additionalNotes, setAdditionalNotes] = useState("");
+
+  const [selectedAllergies, setSelectedAllergies] = useState<string[]>([]);
+  const [otherAllergy, setOtherAllergy] = useState("");
 
   const [icdSearch, setIcdSearch] = useState("");
   const [icdResults, setIcdResults] = useState<Icd10[]>([]);
   const [selectedIcd, setSelectedIcd] = useState<Icd10 | null>(null);
   const [icdLoading, setIcdLoading] = useState(false);
 
-  const [includeConsultationSummary, setIncludeConsultationSummary] =
-    useState(false);
-
+  const [includeConsultationSummary, setIncludeConsultationSummary] = useState(false);
   const [includeLabs, setIncludeLabs] = useState(false);
   const [includeImaging, setIncludeImaging] = useState(false);
   const [includePrescription, setIncludePrescription] = useState(false);
   const [includeOther, setIncludeOther] = useState(false);
 
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploadedAttachments, setUploadedAttachments] = useState<ReferralAttachment[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
 
+  const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [message, setMessage] = useState("");
   const [referralNumber, setReferralNumber] = useState("");
 
   const getQueryParam = (name: string) => {
@@ -188,70 +225,59 @@ export default function ReferralPage() {
 
   useEffect(() => {
     setReferralNumber(generateReferralNumber());
-
     void loadPatients();
     void loadDoctor();
   }, []);
 
   async function loadPatients() {
     setPatientLoading(true);
+    setMessage("");
 
     try {
+      // Use select("*") so this page does not fail when optional columns
+      // differ between CareScriber database versions.
       const { data, error } = await supabase
         .from("patients")
-        .select(
-          "id,first_name,surname,last_name,name,patient_id,id_number,national_id,date_of_birth,dob,gender,mobile,email",
-        )
-        .order("first_name", { ascending: true })
-        .limit(2000);
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(300);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
-      const rows = (data || []) as Patient[];
-
+      const rows = (data || []).map(mapPatient);
       setPatients(rows);
 
-      const queryPatientId = getQueryParam("patientId");
+      const queryPatientId =
+        getQueryParam("patientId") ||
+        getQueryParam("patient");
 
       const storedPatientId =
         typeof window !== "undefined"
-          ? window.sessionStorage.getItem(
-              "carescriber_selected_patient_id",
-            )
+          ? window.sessionStorage.getItem("carescriber_selected_patient_id")
           : null;
 
       const wantedPatientId = queryPatientId || storedPatientId;
 
-      if (!wantedPatientId) {
-        return;
-      }
+      if (!wantedPatientId) return;
 
-      const match = rows.find(
-        (patient) => patient.id === wantedPatientId,
-      );
+      const match = rows.find((patient) => patient.id === wantedPatientId);
 
       if (match) {
         selectPatient(match);
         return;
       }
 
-      const { data: exactPatient, error: exactError } =
-        await supabase
-          .from("patients")
-          .select(
-            "id,first_name,surname,last_name,name,patient_id,id_number,national_id,date_of_birth,dob,gender,mobile,email",
-          )
-          .eq("id", wantedPatientId)
-          .maybeSingle();
+      const { data: exactPatient, error: exactError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", wantedPatientId)
+        .maybeSingle();
 
       if (!exactError && exactPatient) {
-        selectPatient(exactPatient as Patient);
+        selectPatient(mapPatient(exactPatient));
       }
     } catch (error) {
-      console.error(error);
-
+      console.error("Patient load failed:", error);
       setMessage(
         error instanceof Error
           ? `Could not load patients: ${error.message}`
@@ -259,6 +285,94 @@ export default function ReferralPage() {
       );
     } finally {
       setPatientLoading(false);
+    }
+  }
+
+  async function searchPatients() {
+    const term = patientSearch.trim();
+
+    if (!term) {
+      setMessage("Enter patient name, surname, ID / passport or mobile number.");
+      return;
+    }
+
+    setPatientSearching(true);
+    setMessage("");
+    setSelectedPatient(null);
+
+    try {
+      const normalised = normaliseId(term);
+
+      // Search broad text fields, but gracefully fall back if one optional
+      // column does not exist in this Supabase schema.
+      const searchSets = [
+        [
+          `first_name.ilike.%${term}%`,
+          `surname.ilike.%${term}%`,
+          `last_name.ilike.%${term}%`,
+          `patient_id.ilike.%${term}%`,
+          `id_number.ilike.%${term}%`,
+          `national_id.ilike.%${term}%`,
+          `mobile.ilike.%${term}%`,
+          `phone.ilike.%${term}%`,
+          `patient_id.ilike.%${normalised}%`,
+          `id_number.ilike.%${normalised}%`,
+          `national_id.ilike.%${normalised}%`,
+        ],
+        [
+          `first_name.ilike.%${term}%`,
+          `surname.ilike.%${term}%`,
+          `patient_id.ilike.%${term}%`,
+          `id_number.ilike.%${term}%`,
+          `mobile.ilike.%${term}%`,
+        ],
+        [
+          `first_name.ilike.%${term}%`,
+          `surname.ilike.%${term}%`,
+          `patient_id.ilike.%${term}%`,
+        ],
+      ];
+
+      let found: any[] = [];
+      let lastError: any = null;
+
+      for (const filters of searchSets) {
+        const result = await supabase
+          .from("patients")
+          .select("*")
+          .or(filters.join(","))
+          .limit(30);
+
+        if (!result.error) {
+          found = result.data || [];
+          lastError = null;
+          break;
+        }
+
+        lastError = result.error;
+      }
+
+      if (lastError) throw lastError;
+
+      const mapped = found.map(mapPatient);
+      setPatients(mapped);
+
+      if (mapped.length === 0) {
+        setMessage("No matching patient found.");
+      } else if (mapped.length === 1) {
+        selectPatient(mapped[0]);
+      } else {
+        setMessage(`${mapped.length} matching patients found. Select the correct patient.`);
+      }
+    } catch (error) {
+      console.error("Patient search failed:", error);
+      setMessage(
+        error instanceof Error
+          ? `Patient search failed: ${error.message}`
+          : "Patient search failed.",
+      );
+    } finally {
+      setPatientSearching(false);
     }
   }
 
@@ -285,31 +399,34 @@ export default function ReferralPage() {
 
       if (!byId.error && byId.data) {
         profile = byId.data;
-      } else if (user.email) {
-        const byEmail = await supabase
+      } else {
+        const byUserId = await supabase
           .from("profiles")
           .select("*")
-          .eq("email", user.email)
+          .eq("user_id", user.id)
           .maybeSingle();
 
-        if (!byEmail.error && byEmail.data) {
-          profile = byEmail.data;
+        if (!byUserId.error && byUserId.data) {
+          profile = byUserId.data;
+        } else if (user.email) {
+          const byEmail = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("email", user.email)
+            .maybeSingle();
+
+          if (!byEmail.error && byEmail.data) profile = byEmail.data;
         }
       }
 
-      const doctorProfile: DoctorProfile = {
+      setDoctor({
         ...(profile || {}),
         id: profile?.id || user.id,
         email: profile?.email || user.email || "",
-      };
-
-      setDoctor(doctorProfile);
+      });
     } catch (error) {
-      console.error(error);
-
-      setMessage(
-        "Could not load the logged-in clinician profile.",
-      );
+      console.error("Clinician profile load failed:", error);
+      setMessage("Could not load the logged-in clinician profile.");
     } finally {
       setDoctorLoading(false);
     }
@@ -317,8 +434,35 @@ export default function ReferralPage() {
 
   function selectPatient(patient: Patient) {
     setSelectedPatient(patient);
-
     setPatientSearch(patientName(patient));
+    setCurrentMedication(patient.current_medicines || "");
+
+    if (patient.allergies) {
+      const existing = patient.allergies
+        .split(/[,;|]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      const known = existing.filter((item) =>
+        COMMON_ALLERGIES.some(
+          (common) => common.toLowerCase() === item.toLowerCase(),
+        ),
+      );
+
+      const unknown = existing.filter(
+        (item) =>
+          !COMMON_ALLERGIES.some(
+            (common) => common.toLowerCase() === item.toLowerCase(),
+          ),
+      );
+
+      setSelectedAllergies(known);
+      setOtherAllergy(unknown.join(", "));
+
+      if (unknown.length > 0 && !known.includes("Other")) {
+        setSelectedAllergies([...known, "Other"]);
+      }
+    }
 
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem(
@@ -326,26 +470,26 @@ export default function ReferralPage() {
         patient.id,
       );
     }
+
+    setMessage("");
   }
 
   function clearPatient() {
     setSelectedPatient(null);
-
     setPatientSearch("");
+    setCurrentMedication("");
+    setSelectedAllergies([]);
+    setOtherAllergy("");
 
     if (typeof window !== "undefined") {
-      window.sessionStorage.removeItem(
-        "carescriber_selected_patient_id",
-      );
+      window.sessionStorage.removeItem("carescriber_selected_patient_id");
     }
   }
 
   const filteredPatients = useMemo(() => {
     const query = patientSearch.trim().toLowerCase();
 
-    if (!query || selectedPatient) {
-      return [];
-    }
+    if (!query || selectedPatient) return [];
 
     return patients
       .filter((patient) => {
@@ -355,6 +499,7 @@ export default function ReferralPage() {
           patient.patient_id,
           patient.national_id,
           patient.mobile,
+          patient.phone,
           patient.email,
         ]
           .filter(Boolean)
@@ -363,7 +508,7 @@ export default function ReferralPage() {
 
         return searchableText.includes(query);
       })
-      .slice(0, 12);
+      .slice(0, 15);
   }, [patients, patientSearch, selectedPatient]);
 
   useEffect(() => {
@@ -390,24 +535,18 @@ export default function ReferralPage() {
       const { data, error } = await supabase
         .from("icd10_codes")
         .select("code,description")
-        .or(
-          `code.ilike.%${safeQuery}%,description.ilike.%${safeQuery}%`,
-        )
+        .or(`code.ilike.%${safeQuery}%,description.ilike.%${safeQuery}%`)
         .order("code", { ascending: true })
         .limit(60);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setIcdResults((data || []) as Icd10[]);
     } catch (error) {
       console.error("ICD-10 search failed:", error);
-
       setIcdResults([]);
-
       setMessage(
-        "ICD-10 search could not load. Confirm that the full ICD-10 dataset exists in public.icd10_codes.",
+        "ICD-10 search could not load. Confirm the full dataset exists in public.icd10_codes.",
       );
     } finally {
       setIcdLoading(false);
@@ -416,70 +555,163 @@ export default function ReferralPage() {
 
   function selectIcd(item: Icd10) {
     setSelectedIcd(item);
-
     setIcdSearch(`${item.code} - ${item.description}`);
-
     setIcdResults([]);
   }
 
   function clearIcd() {
     setSelectedIcd(null);
-
     setIcdSearch("");
-
     setIcdResults([]);
   }
 
-  const doctorName = useMemo(() => {
-    if (!doctor) {
-      return "";
+  function toggleAllergy(allergy: string) {
+    setSelectedAllergies((current) => {
+      if (allergy === "No known allergies") {
+        return current.includes(allergy) ? [] : [allergy];
+      }
+
+      const withoutNkda = current.filter(
+        (item) => item !== "No known allergies",
+      );
+
+      return withoutNkda.includes(allergy)
+        ? withoutNkda.filter((item) => item !== allergy)
+        : [...withoutNkda, allergy];
+    });
+  }
+
+  const allergyText = useMemo(() => {
+    const values = selectedAllergies.filter(
+      (item) => item !== "Other",
+    );
+
+    if (selectedAllergies.includes("Other") && otherAllergy.trim()) {
+      values.push(otherAllergy.trim());
     }
+
+    return values.join(", ");
+  }, [selectedAllergies, otherAllergy]);
+
+  function handleFiles(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || []);
+
+    if (files.length === 0) return;
+
+    const allowed = files.filter((file) => file.size <= 10 * 1024 * 1024);
+
+    if (allowed.length !== files.length) {
+      setMessage("Files larger than 10 MB were not added.");
+    }
+
+    setPendingFiles((current) => [...current, ...allowed].slice(0, 10));
+  }
+
+  function removePendingFile(index: number) {
+    setPendingFiles((current) => current.filter((_, i) => i !== index));
+  }
+
+  async function uploadAttachments(referralId: string) {
+    if (pendingFiles.length === 0) return uploadedAttachments;
+
+    setUploadingAttachments(true);
+
+    try {
+      const uploaded: ReferralAttachment[] = [];
+
+      for (const file of pendingFiles) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `${referralId}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("referral-attachments")
+          .upload(path, file, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: file.type || undefined,
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from("referral-attachments")
+          .createSignedUrl(path, 60 * 60 * 24 * 7);
+
+        if (signedError) throw signedError;
+
+        const record: ReferralAttachment = {
+          file_name: file.name,
+          storage_path: path,
+          mime_type: file.type || null,
+          file_size: file.size,
+          signed_url: signedData?.signedUrl || null,
+        };
+
+        const { data: attachmentRow, error: rowError } = await supabase
+          .from("medical_referral_attachments")
+          .insert({
+            referral_id: referralId,
+            file_name: record.file_name,
+            storage_path: record.storage_path,
+            mime_type: record.mime_type,
+            file_size: record.file_size,
+          })
+          .select("id")
+          .single();
+
+        if (rowError) throw rowError;
+
+        uploaded.push({
+          ...record,
+          id: attachmentRow.id,
+        });
+      }
+
+      setUploadedAttachments((current) => [...current, ...uploaded]);
+      setPendingFiles([]);
+      return [...uploadedAttachments, ...uploaded];
+    } finally {
+      setUploadingAttachments(false);
+    }
+  }
+
+  const doctorName = useMemo(() => {
+    if (!doctor) return "";
 
     return (
       clean(doctor.full_name) ||
       clean(doctor.name) ||
-      `${clean(doctor.first_name)} ${clean(
-        doctor.surname,
-      )}`.trim()
+      `${clean(doctor.first_name)} ${clean(doctor.surname)}`.trim()
     );
   }, [doctor]);
 
   const doctorRegistration =
     clean(doctor?.hpcsa_number) ||
-    clean(doctor?.registration_number);
+    clean(doctor?.registration_number) ||
+    clean(doctor?.hpcsa);
 
-  function validateReferral() {
-    if (!selectedPatient) {
-      return "Please select a patient.";
-    }
-
+  function validateReferral(requireEmail = false) {
+    if (!selectedPatient) return "Please select a patient.";
     if (!patientIdentifier(selectedPatient)) {
-      return "The selected patient does not have an ID / passport number. Please update the patient record before issuing the referral.";
+      return "The selected patient does not have an ID / passport number.";
     }
-
-    if (!doctorName) {
-      return "The logged-in clinician profile is missing the clinician name.";
-    }
-
-    if (!reason.trim()) {
-      return "Please enter the reason for referral.";
-    }
-
+    if (!doctorName) return "The logged-in clinician profile is missing the clinician name.";
+    if (!reason.trim()) return "Please enter the reason for referral.";
     if (!referralRequest.trim()) {
       return "Please enter the specific request to the receiving clinician.";
     }
-
+    if (requireEmail && !recipientEmail.trim()) {
+      return "Please enter the receiving clinician's email address before sending.";
+    }
     return "";
   }
 
-  async function saveReferral(
-    status: "draft" | "issued",
-  ) {
-    const validationError = validateReferral();
+  async function saveReferral(status: "draft" | "issued" | "emailed") {
+    const validationError = validateReferral(status === "emailed");
 
     if (validationError) {
       setMessage(validationError);
-      return false;
+      return null;
     }
 
     setSaving(true);
@@ -492,175 +724,104 @@ export default function ReferralPage() {
 
       const payload = {
         referral_number: referralNumber,
-
         patient_id: selectedPatient!.id,
         patient_identifier: patientIdentifier(selectedPatient),
-
         patient_name: patientName(selectedPatient),
-
-        patient_date_of_birth:
-          patientDob(selectedPatient) || null,
-
+        patient_date_of_birth: patientDob(selectedPatient) || null,
         patient_gender: selectedPatient!.gender || null,
-        patient_mobile: selectedPatient!.mobile || null,
+        patient_mobile: patientMobile(selectedPatient) || null,
         patient_email: selectedPatient!.email || null,
 
-        consultation_id:
-          getQueryParam("consultationId") || null,
-
-        symptomai_referral_id:
-          getQueryParam("referralId") || null,
+        consultation_id: getQueryParam("consultationId") || null,
+        symptomai_referral_id: getQueryParam("referralId") || null,
 
         referred_by_user_id: user?.id || null,
-
         doctor_name: doctorName,
+        doctor_qualifications: doctor?.qualifications || null,
+        doctor_registration_number: doctorRegistration || null,
+        doctor_practice_number: doctor?.practice_number || null,
+        doctor_email: doctor?.email || null,
+        doctor_mobile: doctor?.mobile || doctor?.phone || null,
+        practice_name: doctor?.practice_name || "CareScriber",
+        practice_address: doctor?.practice_address || null,
 
-        doctor_qualifications:
-          doctor?.qualifications || null,
-
-        doctor_registration_number:
-          doctorRegistration || null,
-
-        doctor_practice_number:
-          doctor?.practice_number || null,
-
-        doctor_email:
-          doctor?.email || null,
-
-        doctor_mobile:
-          doctor?.mobile || doctor?.phone || null,
-
-        practice_name:
-          doctor?.practice_name || "CareScriber",
-
-        practice_address:
-          doctor?.practice_address || null,
-
-        recipient_name:
-          recipientName.trim() || null,
-
-        recipient_speciality:
-          recipientSpeciality.trim() || null,
-
-        recipient_facility:
-          recipientFacility.trim() || null,
-
-        recipient_email:
-          recipientEmail.trim() || null,
-
-        recipient_phone:
-          recipientPhone.trim() || null,
+        recipient_name: recipientName.trim() || null,
+        recipient_speciality: recipientSpeciality.trim() || null,
+        recipient_facility: recipientFacility.trim() || null,
+        recipient_email: recipientEmail.trim() || null,
+        recipient_phone: recipientPhone.trim() || null,
 
         urgency,
-
         reason_for_referral: reason.trim(),
+        clinical_summary: clinicalSummary.trim() || null,
+        examination_findings: examinationFindings.trim() || null,
+        relevant_medical_history: medicalHistory.trim() || null,
+        current_medication: currentMedication.trim() || null,
+        allergies: allergyText || null,
+        investigations: investigations.trim() || null,
 
-        clinical_summary:
-          clinicalSummary.trim() || null,
+        icd10_code: selectedIcd?.code || null,
+        icd10_description: selectedIcd?.description || null,
+        working_diagnosis: selectedIcd?.description || null,
 
-        examination_findings:
-          examinationFindings.trim() || null,
+        management_to_date: managementToDate.trim() || null,
+        referral_request: referralRequest.trim(),
+        additional_notes: additionalNotes.trim() || null,
 
-        relevant_medical_history:
-          medicalHistory.trim() || null,
-
-        current_medication:
-          currentMedication.trim() || null,
-
-        allergies:
-          allergies.trim() || null,
-
-        investigations:
-          investigations.trim() || null,
-
-        icd10_code:
-          selectedIcd?.code || null,
-
-        icd10_description:
-          selectedIcd?.description || null,
-
-        working_diagnosis:
-          selectedIcd?.description || null,
-
-        management_to_date:
-          managementToDate.trim() || null,
-
-        referral_request:
-          referralRequest.trim(),
-
-        additional_notes:
-          additionalNotes.trim() || null,
-
-        include_consultation_summary:
-          includeConsultationSummary,
-
-        include_laboratory_results:
-          includeLabs,
-
-        include_imaging:
-          includeImaging,
-
-        include_prescription:
-          includePrescription,
-
-        include_other_attachment:
-          includeOther,
+        include_consultation_summary: includeConsultationSummary,
+        include_laboratory_results: includeLabs,
+        include_imaging: includeImaging,
+        include_prescription: includePrescription,
+        include_other_attachment: includeOther,
 
         status,
-
         issued_at:
-          status === "issued"
+          status === "issued" || status === "emailed"
             ? new Date().toISOString()
             : null,
       };
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("medical_referrals")
-        .upsert(payload, {
-          onConflict: "referral_number",
-        });
+        .upsert(payload, { onConflict: "referral_number" })
+        .select("id")
+        .single();
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
+
+      const attachments = await uploadAttachments(data.id);
 
       setMessage(
-        status === "issued"
-          ? `Referral ${referralNumber} issued and saved.`
-          : `Referral ${referralNumber} saved as draft.`,
+        status === "draft"
+          ? `Referral ${referralNumber} saved as draft.`
+          : `Referral ${referralNumber} saved successfully.`,
       );
 
-      return true;
+      return {
+        referralId: data.id as string,
+        attachments,
+      };
     } catch (error) {
-      console.error(error);
-
+      console.error("Referral save failed:", error);
       setMessage(
         error instanceof Error
           ? `Referral save failed: ${error.message}`
           : "Referral save failed.",
       );
-
-      return false;
+      return null;
     } finally {
       setSaving(false);
     }
   }
 
-  function buildLetterHtml() {
-    if (!selectedPatient) {
-      return "";
-    }
+  function buildLetterHtml(forEmail = false) {
+    if (!selectedPatient) return "";
 
     const dob = patientDob(selectedPatient);
-
     const age = calculateAge(dob);
 
     const icdText = selectedIcd
-      ? `${escapeHtml(
-          selectedIcd.code,
-        )} - ${escapeHtml(
-          selectedIcd.description,
-        )}`
+      ? `${escapeHtml(selectedIcd.code)} - ${escapeHtml(selectedIcd.description)}`
       : "Not recorded";
 
     const doctorContact = [
@@ -670,765 +831,306 @@ export default function ReferralPage() {
       .filter(Boolean)
       .join(" · ");
 
-    const receivingClinician =
-      recipientName.trim() ||
-      "Receiving clinician";
-
-    const receivingDetails =
-      [
-        recipientSpeciality.trim(),
-        recipientFacility.trim(),
-      ]
-        .filter(Boolean)
-        .join(" · ") ||
-      "Not specified";
+    const attachmentList =
+      uploadedAttachments.length > 0
+        ? `<h2>Attachments</h2><ul>${uploadedAttachments
+            .map(
+              (attachment) =>
+                `<li>${escapeHtml(attachment.file_name)}</li>`,
+            )
+            .join("")}</ul>`
+        : "";
 
     return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
 <title>${escapeHtml(referralNumber)}</title>
-
 <style>
-  @page {
-    size: A4 portrait;
-    margin: 14mm 16mm;
-  }
-
-  * {
-    box-sizing: border-box;
-  }
-
-  html,
-  body {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    background: #ffffff;
-  }
-
-  body {
-    font-family: Arial, Helvetica, sans-serif;
-    color: #111827;
-    font-size: 11.5px;
-    line-height: 1.45;
-  }
-
-  .document {
-    width: 100%;
-    max-width: 178mm;
-    margin: 0 auto;
-  }
-
-  .top {
-    width: 100%;
-    text-align: center;
-    border-bottom: 3px solid #f97316;
-    padding: 0 0 12px 0;
-    margin: 0 0 16px 0;
-  }
-
-  .brand {
-    color: #f97316;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  h1 {
-    font-size: 24px;
-    text-align: center;
-    margin: 3px 0 4px 0;
-    color: #111827;
-  }
-
-  .reference {
-    text-align: center;
-    font-size: 10.5px;
-    color: #4b5563;
-  }
-
-  .grid {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 22px;
-    row-gap: 8px;
-  }
-
-  .patient-box,
-  .recipient-box {
-    width: 100%;
-    border: 1px solid #e5e7eb;
-    padding: 12px;
-    border-radius: 8px;
-    margin: 10px 0;
-  }
-
-  .label {
-    color: #6b7280;
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .value {
-    font-weight: 600;
-    color: #111827;
-  }
-
-  .urgency {
-    display: inline-block;
-    margin-top: 9px;
-    padding: 3px 9px;
-    border: 1px solid #111827;
-    border-radius: 999px;
-    font-weight: 700;
-  }
-
-  h2 {
-    width: 100%;
-    font-size: 11px;
-    margin: 15px 0 5px;
-    padding-bottom: 3px;
-    color: #374151;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    border-bottom: 1px solid #e5e7eb;
-  }
-
-  p {
-    width: 100%;
-    margin: 5px 0;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
-  }
-
-  .footer {
-    width: 100%;
-    margin-top: 24px;
-    padding-top: 11px;
-    border-top: 1px solid #d1d5db;
-  }
-
-  .footer-name {
-    margin-top: 3px;
-    font-weight: 700;
-  }
-
-  .small {
-    font-size: 9.5px;
-    color: #6b7280;
-  }
-
+  @page { size: A4 portrait; margin: 14mm 16mm; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; width:100%; background:#fff; }
+  body { font-family:Arial,Helvetica,sans-serif; color:#111827; font-size:11.5px; line-height:1.45; }
+  .document { width:100%; max-width:178mm; margin:0 auto; }
+  .top { width:100%; text-align:center; border-bottom:3px solid #f97316; padding-bottom:12px; margin-bottom:16px; }
+  .brand { color:#f97316; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
+  h1 { font-size:24px; text-align:center; margin:3px 0 4px; }
+  .reference { text-align:center; font-size:10.5px; color:#4b5563; }
+  .grid { width:100%; display:grid; grid-template-columns:1fr 1fr; column-gap:22px; row-gap:8px; }
+  .box { width:100%; border:1px solid #e5e7eb; padding:12px; border-radius:8px; margin:10px 0; }
+  .label { color:#6b7280; font-size:9px; text-transform:uppercase; letter-spacing:.04em; }
+  .value { font-weight:600; }
+  .urgency { display:inline-block; margin-top:9px; padding:3px 9px; border:1px solid #111827; border-radius:999px; font-weight:700; }
+  h2 { width:100%; font-size:11px; margin:15px 0 5px; padding-bottom:3px; color:#374151; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid #e5e7eb; }
+  p { width:100%; margin:5px 0; white-space:pre-wrap; overflow-wrap:break-word; }
+  .footer { width:100%; margin-top:24px; padding-top:11px; border-top:1px solid #d1d5db; }
   @media print {
-    html,
-    body {
-      width: 100%;
-      margin: 0;
-      padding: 0;
-    }
-
-    .document {
-      width: 100%;
-      max-width: none;
-      margin: 0 auto;
-    }
-
-    .patient-box,
-    .recipient-box,
-    .footer {
-      break-inside: avoid;
-    }
+    .document { width:100%; max-width:none; margin:0 auto; }
+    .box, .footer { break-inside:avoid; }
   }
 </style>
 </head>
-
 <body>
-  <div class="document">
-
-    <div class="top">
-      <div class="brand">
-        CareScriber AI
-      </div>
-
-      <h1>
-        Medical Referral
-      </h1>
-
-      <div class="reference">
-        Reference:
-        <strong>
-          ${escapeHtml(referralNumber)}
-        </strong>
-        &nbsp; · &nbsp;
-        Date:
-        ${escapeHtml(
-          new Date().toLocaleDateString(
-            "en-ZA",
-          ),
-        )}
-      </div>
+<div class="document">
+  <div class="top">
+    <div class="brand">CareScriber AI</div>
+    <h1>Medical Referral</h1>
+    <div class="reference">
+      Reference: <strong>${escapeHtml(referralNumber)}</strong>
+      &nbsp; · &nbsp;
+      Date: ${escapeHtml(new Date().toLocaleDateString("en-ZA"))}
     </div>
-
-    <div class="patient-box">
-
-      <div class="grid">
-
-        <div>
-          <div class="label">
-            Patient
-          </div>
-
-          <div class="value">
-            ${escapeHtml(
-              patientName(
-                selectedPatient,
-              ),
-            )}
-          </div>
-        </div>
-
-        <div>
-          <div class="label">
-            ID / Passport
-          </div>
-
-          <div class="value">
-            ${escapeHtml(
-              patientIdentifier(
-                selectedPatient,
-              ),
-            )}
-          </div>
-        </div>
-
-        <div>
-          <div class="label">
-            Date of birth
-          </div>
-
-          <div class="value">
-            ${
-              escapeHtml(
-                formatDateZA(dob) ||
-                  "Not recorded",
-              )
-            }
-            ${
-              age
-                ? ` · Age ${escapeHtml(
-                    age,
-                  )}`
-                : ""
-            }
-          </div>
-        </div>
-
-        <div>
-          <div class="label">
-            Gender
-          </div>
-
-          <div class="value">
-            ${escapeHtml(
-              clean(
-                selectedPatient.gender,
-              ) ||
-                "Not recorded",
-            )}
-          </div>
-        </div>
-
-      </div>
-
-    </div>
-
-    <div class="recipient-box">
-
-      <div class="grid">
-
-        <div>
-          <div class="label">
-            Referred to
-          </div>
-
-          <div class="value">
-            ${escapeHtml(
-              receivingClinician,
-            )}
-          </div>
-        </div>
-
-        <div>
-          <div class="label">
-            Speciality / Facility
-          </div>
-
-          <div class="value">
-            ${escapeHtml(
-              receivingDetails,
-            )}
-          </div>
-        </div>
-
-      </div>
-
-      <span class="urgency">
-        ${escapeHtml(
-          urgency,
-        )}
-      </span>
-
-    </div>
-
-    <p>
-      Dear Colleague,
-    </p>
-
-    <p>
-      Thank you for assessing the above-mentioned patient.
-    </p>
-
-    <h2>
-      Reason for Referral
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        reason ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Clinical Summary / History
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        clinicalSummary ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Relevant Examination / Clinical Findings
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        examinationFindings ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Relevant Medical History
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        medicalHistory ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Current Medication
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        currentMedication ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Allergies
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        allergies ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Investigations / Results
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        investigations ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Working Diagnosis / ICD-10
-    </h2>
-
-    <p>
-      ${icdText}
-    </p>
-
-    <h2>
-      Treatment / Management to Date
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        managementToDate ||
-          "Not recorded",
-      )}
-    </p>
-
-    <h2>
-      Specific Referral Request
-    </h2>
-
-    <p>
-      ${escapeHtml(
-        referralRequest ||
-          "Please assess and advise regarding further management.",
-      )}
-    </p>
-
-    ${
-      additionalNotes
-        ? `
-          <h2>
-            Additional Notes
-          </h2>
-
-          <p>
-            ${escapeHtml(
-              additionalNotes,
-            )}
-          </p>
-        `
-        : ""
-    }
-
-    <p>
-      Please assess and manage as clinically appropriate.
-      Kindly communicate significant findings and the ongoing
-      management plan where appropriate.
-    </p>
-
-    <div class="footer">
-
-      <div>
-        Kind regards,
-      </div>
-
-      <div class="footer-name">
-        ${escapeHtml(
-          doctorName ||
-            "Referring clinician",
-        )}
-      </div>
-
-      ${
-        doctor?.qualifications
-          ? `
-            <div>
-              ${escapeHtml(
-                doctor.qualifications,
-              )}
-            </div>
-          `
-          : ""
-      }
-
-      <div>
-        HPCSA / Registration:
-        ${escapeHtml(
-          doctorRegistration ||
-            "Not recorded",
-        )}
-      </div>
-
-      <div>
-        Practice No:
-        ${escapeHtml(
-          clean(
-            doctor?.practice_number,
-          ) ||
-            "Not recorded",
-        )}
-      </div>
-
-      ${
-        doctorContact
-          ? `
-            <div>
-              ${escapeHtml(
-                doctorContact,
-              )}
-            </div>
-          `
-          : ""
-      }
-
-      ${
-        doctor?.practice_address
-          ? `
-            <div>
-              ${escapeHtml(
-                doctor.practice_address,
-              )}
-            </div>
-          `
-          : ""
-      }
-
-      <div class="small">
-        Generated securely by CareScriber.
-      </div>
-
-    </div>
-
   </div>
+
+  <div class="box">
+    <div class="grid">
+      <div><div class="label">Patient</div><div class="value">${escapeHtml(patientName(selectedPatient))}</div></div>
+      <div><div class="label">ID / Passport</div><div class="value">${escapeHtml(patientIdentifier(selectedPatient))}</div></div>
+      <div><div class="label">Date of birth</div><div class="value">${escapeHtml(formatDateZA(dob) || "Not recorded")}${age ? ` · Age ${escapeHtml(age)}` : ""}</div></div>
+      <div><div class="label">Gender</div><div class="value">${escapeHtml(clean(selectedPatient.gender) || "Not recorded")}</div></div>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="grid">
+      <div><div class="label">Referred to</div><div class="value">${escapeHtml(recipientName.trim() || "Receiving clinician")}</div></div>
+      <div><div class="label">Speciality / Facility</div><div class="value">${escapeHtml([recipientSpeciality.trim(), recipientFacility.trim()].filter(Boolean).join(" · ") || "Not specified")}</div></div>
+    </div>
+    <span class="urgency">${escapeHtml(urgency)}</span>
+  </div>
+
+  <p>Dear Colleague,</p>
+  <p>Thank you for assessing the above-mentioned patient.</p>
+
+  <h2>Reason for Referral</h2>
+  <p>${escapeHtml(reason || "Not recorded")}</p>
+
+  <h2>Clinical Summary / History</h2>
+  <p>${escapeHtml(clinicalSummary || "Not recorded")}</p>
+
+  <h2>Relevant Examination / Clinical Findings</h2>
+  <p>${escapeHtml(examinationFindings || "Not recorded")}</p>
+
+  <h2>Relevant Medical History</h2>
+  <p>${escapeHtml(medicalHistory || "Not recorded")}</p>
+
+  <h2>Current Medication</h2>
+  <p>${escapeHtml(currentMedication || "Not recorded")}</p>
+
+  <h2>Allergies</h2>
+  <p>${escapeHtml(allergyText || "Not recorded")}</p>
+
+  <h2>Investigations / Results</h2>
+  <p>${escapeHtml(investigations || "Not recorded")}</p>
+
+  <h2>Working Diagnosis / ICD-10</h2>
+  <p>${icdText}</p>
+
+  <h2>Treatment / Management to Date</h2>
+  <p>${escapeHtml(managementToDate || "Not recorded")}</p>
+
+  <h2>Specific Referral Request</h2>
+  <p>${escapeHtml(referralRequest || "Please assess and advise regarding further management.")}</p>
+
+  ${
+    additionalNotes
+      ? `<h2>Additional Notes</h2><p>${escapeHtml(additionalNotes)}</p>`
+      : ""
+  }
+
+  ${attachmentList}
+
+  <p>Please assess and manage as clinically appropriate. Kindly communicate significant findings and the ongoing management plan where appropriate.</p>
+
+  <div class="footer">
+    <div>Kind regards,</div>
+    <div><strong>${escapeHtml(doctorName || "Referring clinician")}</strong></div>
+    ${doctor?.qualifications ? `<div>${escapeHtml(doctor.qualifications)}</div>` : ""}
+    <div>HPCSA / Registration: ${escapeHtml(doctorRegistration || "Not recorded")}</div>
+    <div>Practice No: ${escapeHtml(clean(doctor?.practice_number) || "Not recorded")}</div>
+    ${doctorContact ? `<div>${escapeHtml(doctorContact)}</div>` : ""}
+    ${doctor?.practice_address ? `<div>${escapeHtml(doctor.practice_address)}</div>` : ""}
+    <div style="margin-top:8px;color:#6b7280;font-size:9.5px">Generated securely by CareScriber.</div>
+  </div>
+</div>
 </body>
 </html>`;
   }
 
   async function issueAndPrint() {
     const saved = await saveReferral("issued");
-
-    if (!saved) {
-      return;
-    }
+    if (!saved) return;
 
     const html = buildLetterHtml();
 
-    const popup = window.open(
-      "",
-      "_blank",
-      "noopener,noreferrer",
-    );
+    const popup = window.open("", "_blank");
 
     if (!popup) {
       setMessage(
         "Referral saved, but the print window was blocked. Allow pop-ups and try again.",
       );
-
       return;
     }
 
     popup.document.open();
-
     popup.document.write(html);
-
     popup.document.close();
-
     popup.focus();
 
-    setTimeout(() => {
-      popup.print();
-    }, 350);
+    setTimeout(() => popup.print(), 350);
+  }
+
+  async function sendReferral() {
+    const validationError = validateReferral(true);
+
+    if (validationError) {
+      setMessage(validationError);
+      return;
+    }
+
+    setSending(true);
+    setMessage("");
+
+    try {
+      const saved = await saveReferral("emailed");
+      if (!saved) return;
+
+      const attachmentsForEmail = saved.attachments || uploadedAttachments;
+
+      const response = await fetch("/api/send-referral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: recipientEmail.trim(),
+          recipientName: recipientName.trim(),
+          patientName: patientName(selectedPatient),
+          referralNumber,
+          subject: `Medical Referral - ${patientName(selectedPatient)} - ${referralNumber}`,
+          html: buildLetterHtml(true),
+          attachments: attachmentsForEmail.map((attachment) => ({
+            fileName: attachment.file_name,
+            signedUrl: attachment.signed_url,
+          })),
+        }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(result.error || "Could not send referral email.");
+      }
+
+      setMessage(
+        `Referral ${referralNumber} sent successfully to ${recipientEmail.trim()}.`,
+      );
+    } catch (error) {
+      console.error("Referral email failed:", error);
+      setMessage(
+        error instanceof Error
+          ? `Referral email failed: ${error.message}`
+          : "Referral email failed.",
+      );
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
     <main style={styles.page}>
       <section style={styles.card}>
-        <Link
-          href="/dashboard"
-          style={styles.back}
-        >
+        <Link href="/dashboard" style={styles.back}>
           ← Back to Dashboard
         </Link>
 
         <div style={styles.tabs}>
-          <Link
-            href="/dashboard"
-            style={styles.tab}
-          >
-            Dashboard
-          </Link>
-
-          <Link
-            href="/inbox"
-            style={styles.tab}
-          >
-            Virtual Consult Inbox
-          </Link>
-
-          <Link
-            href="/patients"
-            style={styles.tab}
-          >
-            Patients
-          </Link>
-
-          <Link
-            href="/consultation"
-            style={styles.tab}
-          >
-            Consultation
-          </Link>
-
-          <Link
-            href="/e-script"
-            style={styles.tab}
-          >
-            eScript
-          </Link>
-
-          <Link
-            href="/sick-note"
-            style={styles.tab}
-          >
-            Sick Note
-          </Link>
-
-          <Link
-            href="/referral"
-            style={styles.activeTab}
-          >
-            Referral
-          </Link>
+          <Link href="/dashboard" style={styles.tab}>Dashboard</Link>
+          <Link href="/inbox" style={styles.tab}>Virtual Consult Inbox</Link>
+          <Link href="/patients" style={styles.tab}>Patients</Link>
+          <Link href="/consultation" style={styles.tab}>Consultation</Link>
+          <Link href="/e-script" style={styles.tab}>eScript</Link>
+          <Link href="/sick-note" style={styles.tab}>Sick Note</Link>
+          <Link href="/referral" style={styles.activeTab}>Referral</Link>
         </div>
 
-        <p style={styles.kicker}>
-          CareScriber AI
-        </p>
-
-        <h1 style={styles.title}>
-          Medical Referral
-        </h1>
-
+        <p style={styles.kicker}>CareScriber AI</p>
+        <h1 style={styles.title}>Medical Referral</h1>
         <p style={styles.subtitle}>
-          Create a structured clinical referral with linked
-          patient details, full ICD-10 search and referring
-          clinician details.
+          Create, attach supporting clinical files, print or securely email a medical referral.
         </p>
 
         <div style={styles.info}>
-          Referral No:{" "}
-          {referralNumber ||
-            "Generating..."}
+          Referral No: {referralNumber || "Generating..."}
         </div>
 
-        {message && (
-          <div style={styles.message}>
-            {message}
-          </div>
-        )}
+        {message && <div style={styles.message}>{message}</div>}
 
-        <h2 style={styles.heading}>
-          Patient
-        </h2>
+        <h2 style={styles.heading}>Patient</h2>
 
         {patientLoading && (
-          <div style={styles.info}>
-            Loading patient record...
-          </div>
+          <div style={styles.info}>Loading patient records...</div>
         )}
 
-        <input
-          style={styles.input}
-          value={patientSearch}
-          placeholder="Search patient by name, ID / passport or mobile"
-          onChange={(event) => {
-            setPatientSearch(
-              event.target.value,
-            );
-
-            setSelectedPatient(null);
-          }}
-        />
-
-        {filteredPatients.map(
-          (patient) => (
-            <button
-              type="button"
-              key={patient.id}
-              style={
-                styles.patientCard
+        <div style={styles.searchRow}>
+          <input
+            style={styles.input}
+            value={patientSearch}
+            placeholder="Search patient by name, ID / passport or mobile"
+            onChange={(event) => {
+              setPatientSearch(event.target.value);
+              setSelectedPatient(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void searchPatients();
               }
-              onClick={() =>
-                selectPatient(patient)
-              }
-            >
-              <strong>
-                {patientName(patient)}
-              </strong>
+            }}
+          />
 
-              <span>
-                ID:{" "}
-                {patientIdentifier(
-                  patient,
-                ) ||
-                  "Not captured"}{" "}
-                · DOB:{" "}
-                {formatDateZA(
-                  patientDob(patient),
-                ) ||
-                  "Not captured"}{" "}
-                ·{" "}
-                {patient.mobile ||
-                  "No mobile"}
-              </span>
-            </button>
-          ),
-        )}
+          <button
+            type="button"
+            style={styles.smallDarkButton}
+            disabled={patientSearching}
+            onClick={() => void searchPatients()}
+          >
+            {patientSearching ? "Searching..." : "Search"}
+          </button>
+        </div>
+
+        {filteredPatients.map((patient) => (
+          <button
+            type="button"
+            key={patient.id}
+            style={styles.patientCard}
+            onClick={() => selectPatient(patient)}
+          >
+            <strong>{patientName(patient)}</strong>
+            <span>
+              ID: {patientIdentifier(patient) || "Not captured"} · DOB:{" "}
+              {formatDateZA(patientDob(patient)) || "Not captured"} ·{" "}
+              {patientMobile(patient) || "No mobile"}
+            </span>
+          </button>
+        ))}
 
         {selectedPatient && (
           <div style={styles.selected}>
             <div>
-              <strong>
-                {patientName(
-                  selectedPatient,
-                )}
-              </strong>
-
+              <strong>{patientName(selectedPatient)}</strong>
               <div>
                 ID / Passport:{" "}
-                <b>
-                  {patientIdentifier(
-                    selectedPatient,
-                  ) ||
-                    "Not captured"}
-                </b>
+                <b>{patientIdentifier(selectedPatient) || "Not captured"}</b>
               </div>
-
               <div>
-                DOB:{" "}
-                {formatDateZA(
-                  patientDob(
-                    selectedPatient,
-                  ),
-                ) ||
-                  "Not captured"}
-
-                {calculateAge(
-                  patientDob(
-                    selectedPatient,
-                  ),
-                )
-                  ? ` · Age ${calculateAge(
-                      patientDob(
-                        selectedPatient,
-                      ),
-                    )}`
+                DOB: {formatDateZA(patientDob(selectedPatient)) || "Not captured"}
+                {calculateAge(patientDob(selectedPatient))
+                  ? ` · Age ${calculateAge(patientDob(selectedPatient))}`
                   : ""}
               </div>
-
               <div>
-                {selectedPatient.gender ||
-                  "Gender not captured"}{" "}
-                ·{" "}
-                {selectedPatient.mobile ||
-                  "No mobile"}{" "}
-                ·{" "}
-                {selectedPatient.email ||
-                  "No email"}
+                {selectedPatient.gender || "Gender not captured"} ·{" "}
+                {patientMobile(selectedPatient) || "No mobile"} ·{" "}
+                {selectedPatient.email || "No email"}
               </div>
             </div>
 
@@ -1437,123 +1139,73 @@ export default function ReferralPage() {
               style={styles.smallButton}
               onClick={clearPatient}
             >
-              Change patient
+              Change
             </button>
           </div>
         )}
 
-        <h2 style={styles.heading}>
-          Referring Clinician
-        </h2>
+        <h2 style={styles.heading}>Referring Clinician</h2>
 
         {doctorLoading ? (
-          <div style={styles.info}>
-            Loading clinician profile...
-          </div>
+          <div style={styles.info}>Loading clinician profile...</div>
         ) : (
-          <div
-            style={styles.summaryBox}
-          >
-            <strong>
-              {doctorName ||
-                "Clinician name missing"}
-            </strong>
-
+          <div style={styles.summaryBox}>
+            <strong>{doctorName || "Clinician name missing"}</strong>
+            <span>{doctor?.qualifications || "Qualifications not captured"}</span>
             <span>
-              {doctor?.qualifications ||
-                "Qualifications not captured"}
+              HPCSA / Registration: {doctorRegistration || "Not captured"} ·
+              Practice: {doctor?.practice_number || "Not captured"}
             </span>
-
             <span>
-              HPCSA / Registration:{" "}
-              {doctorRegistration ||
-                "Not captured"}{" "}
-              · Practice:{" "}
-              {doctor?.practice_number ||
-                "Not captured"}
-            </span>
-
-            <span>
-              {doctor?.email ||
-                "No email"}{" "}
-              ·{" "}
-              {doctor?.mobile ||
-                doctor?.phone ||
-                "No mobile"}
+              {doctor?.email || "No email"} ·{" "}
+              {doctor?.mobile || doctor?.phone || "No mobile"}
             </span>
           </div>
         )}
 
-        <h2 style={styles.heading}>
-          Receiving Clinician
-        </h2>
+        <h2 style={styles.heading}>Receiving Clinician</h2>
 
         <div style={styles.grid2}>
           <input
             style={styles.input}
             value={recipientName}
-            onChange={(event) =>
-              setRecipientName(
-                event.target.value,
-              )
-            }
+            onChange={(event) => setRecipientName(event.target.value)}
             placeholder="Clinician name"
           />
 
           <input
             style={styles.input}
-            value={
-              recipientSpeciality
-            }
-            onChange={(event) =>
-              setRecipientSpeciality(
-                event.target.value,
-              )
-            }
+            value={recipientSpeciality}
+            onChange={(event) => setRecipientSpeciality(event.target.value)}
             placeholder="Speciality"
           />
 
           <input
             style={styles.input}
             value={recipientFacility}
-            onChange={(event) =>
-              setRecipientFacility(
-                event.target.value,
-              )
-            }
+            onChange={(event) => setRecipientFacility(event.target.value)}
             placeholder="Practice / facility"
           />
 
           <input
+            type="email"
             style={styles.input}
             value={recipientEmail}
-            onChange={(event) =>
-              setRecipientEmail(
-                event.target.value,
-              )
-            }
-            placeholder="Email"
+            onChange={(event) => setRecipientEmail(event.target.value)}
+            placeholder="Receiving clinician email"
           />
 
           <input
             style={styles.input}
             value={recipientPhone}
-            onChange={(event) =>
-              setRecipientPhone(
-                event.target.value,
-              )
-            }
+            onChange={(event) => setRecipientPhone(event.target.value)}
             placeholder="Telephone"
           />
 
           <select
             style={styles.input}
             value={urgency}
-            onChange={(event) =>
-              setUrgency(
-                event.target.value,
-              )
-            }
+            onChange={(event) => setUrgency(event.target.value)}
           >
             <option>Routine</option>
             <option>Urgent</option>
@@ -1562,127 +1214,98 @@ export default function ReferralPage() {
           </select>
         </div>
 
-        <h2 style={styles.heading}>
-          Reason for Referral *
-        </h2>
-
+        <h2 style={styles.heading}>Reason for Referral *</h2>
         <textarea
           style={styles.textarea}
           value={reason}
-          onChange={(event) =>
-            setReason(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setReason(event.target.value)}
           placeholder="Primary reason for referral and relevant clinical question."
         />
 
-        <h2 style={styles.heading}>
-          Clinical Summary / History
-        </h2>
-
+        <h2 style={styles.heading}>Clinical Summary / History</h2>
         <textarea
           style={styles.textarea}
           value={clinicalSummary}
-          onChange={(event) =>
-            setClinicalSummary(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setClinicalSummary(event.target.value)}
           placeholder="Presenting complaint, duration, progression and relevant associated symptoms."
         />
 
-        <h2 style={styles.heading}>
-          Relevant Examination /
-          Clinical Findings
-        </h2>
-
+        <h2 style={styles.heading}>Relevant Examination / Clinical Findings</h2>
         <textarea
           style={styles.textarea}
           value={examinationFindings}
-          onChange={(event) =>
-            setExaminationFindings(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setExaminationFindings(event.target.value)}
           placeholder="Vitals, examination findings and clinically relevant negatives."
         />
 
         <div style={styles.grid2}>
           <div>
-            <h2 style={styles.heading}>
-              Relevant Medical
-              History
-            </h2>
-
+            <h2 style={styles.heading}>Relevant Medical History</h2>
             <textarea
               style={styles.textarea}
               value={medicalHistory}
-              onChange={(event) =>
-                setMedicalHistory(
-                  event.target.value,
-                )
-              }
+              onChange={(event) => setMedicalHistory(event.target.value)}
               placeholder="Relevant medical / surgical history."
             />
           </div>
 
           <div>
-            <h2 style={styles.heading}>
-              Current Medication
-            </h2>
-
+            <h2 style={styles.heading}>Current Medication</h2>
             <textarea
               style={styles.textarea}
               value={currentMedication}
-              onChange={(event) =>
-                setCurrentMedication(
-                  event.target.value,
-                )
-              }
+              onChange={(event) => setCurrentMedication(event.target.value)}
               placeholder="Current medication."
             />
           </div>
         </div>
 
-        <h2 style={styles.heading}>
-          Allergies
-        </h2>
+        <h2 style={styles.heading}>Allergies</h2>
 
-        <textarea
-          style={styles.textareaSmall}
-          value={allergies}
-          onChange={(event) =>
-            setAllergies(
-              event.target.value,
-            )
-          }
-          placeholder="Drug / food / other allergies, or NKDA if confirmed."
-        />
+        <p style={styles.help}>
+          Select all that apply. Use Other for any allergy not listed.
+        </p>
 
-        <h2 style={styles.heading}>
-          Investigations / Results
-        </h2>
+        <div style={styles.allergyGrid}>
+          {COMMON_ALLERGIES.map((allergy) => (
+            <label key={allergy} style={styles.allergyOption}>
+              <input
+                type="checkbox"
+                checked={selectedAllergies.includes(allergy)}
+                onChange={() => toggleAllergy(allergy)}
+              />
+              <span>{allergy}</span>
+            </label>
+          ))}
+        </div>
 
+        {selectedAllergies.includes("Other") && (
+          <input
+            style={{ ...styles.input, marginTop: 12 }}
+            value={otherAllergy}
+            onChange={(event) => setOtherAllergy(event.target.value)}
+            placeholder="Other allergy / allergies — free text"
+          />
+        )}
+
+        {allergyText && (
+          <div style={styles.allergySummary}>
+            Recorded allergies: <b>{allergyText}</b>
+          </div>
+        )}
+
+        <h2 style={styles.heading}>Investigations / Results</h2>
         <textarea
           style={styles.textarea}
           value={investigations}
-          onChange={(event) =>
-            setInvestigations(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setInvestigations(event.target.value)}
           placeholder="Relevant pathology, imaging and other results."
         />
 
-        <h2 style={styles.heading}>
-          Working Diagnosis / ICD-10
-        </h2>
+        <h2 style={styles.heading}>Working Diagnosis / ICD-10</h2>
 
         <p style={styles.help}>
-          Searches the same full{" "}
-          <b>icd10_codes</b> table used
-          by CareScriber.
+          Searches the full <b>icd10_codes</b> table by code or description.
         </p>
 
         <div style={styles.icdWrap}>
@@ -1691,134 +1314,66 @@ export default function ReferralPage() {
             value={icdSearch}
             onChange={(event) => {
               setSelectedIcd(null);
-
-              setIcdSearch(
-                event.target.value,
-              );
+              setIcdSearch(event.target.value);
             }}
-            placeholder="Search full ICD-10 list, e.g. Z71, dental pain, depression..."
+            placeholder="Search ICD-10, e.g. Z71, dental pain, depression..."
             autoComplete="off"
           />
 
-          {icdLoading && (
-            <div style={styles.help}>
-              Searching ICD-10...
-            </div>
-          )}
+          {icdLoading && <div style={styles.help}>Searching ICD-10...</div>}
 
-          {icdResults.length >
-            0 && (
-            <div
-              style={
-                styles.icdResults
-              }
-            >
-              {icdResults.map(
-                (item) => (
-                  <button
-                    key={`${item.code}-${item.description}`}
-                    type="button"
-                    style={
-                      styles.icdItem
-                    }
-                    onClick={() =>
-                      selectIcd(
-                        item,
-                      )
-                    }
-                  >
-                    <strong>
-                      {item.code}
-                    </strong>
-
-                    <span>
-                      {
-                        item.description
-                      }
-                    </span>
-                  </button>
-                ),
-              )}
+          {icdResults.length > 0 && (
+            <div style={styles.icdResults}>
+              {icdResults.map((item) => (
+                <button
+                  key={`${item.code}-${item.description}`}
+                  type="button"
+                  style={styles.icdItem}
+                  onClick={() => selectIcd(item)}
+                >
+                  <strong>{item.code}</strong>
+                  <span>{item.description}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>
 
         {selectedIcd && (
-          <div
-            style={styles.selectedIcd}
-          >
+          <div style={styles.selectedIcd}>
             <div>
-              <b>
-                {selectedIcd.code}
-              </b>{" "}
-              —{" "}
-              {
-                selectedIcd.description
-              }
+              <b>{selectedIcd.code}</b> — {selectedIcd.description}
             </div>
-
-            <button
-              type="button"
-              style={styles.smallButton}
-              onClick={clearIcd}
-            >
-              Change ICD-10
+            <button type="button" style={styles.smallButton} onClick={clearIcd}>
+              Change
             </button>
           </div>
         )}
 
-        <h2 style={styles.heading}>
-          Treatment / Management to
-          Date
-        </h2>
-
+        <h2 style={styles.heading}>Treatment / Management to Date</h2>
         <textarea
           style={styles.textarea}
           value={managementToDate}
-          onChange={(event) =>
-            setManagementToDate(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setManagementToDate(event.target.value)}
           placeholder="Treatment already given, response and outstanding management."
         />
 
-        <h2 style={styles.heading}>
-          Specific Request to Receiving
-          Clinician *
-        </h2>
-
+        <h2 style={styles.heading}>Specific Request to Receiving Clinician *</h2>
         <textarea
           style={styles.textarea}
           value={referralRequest}
-          onChange={(event) =>
-            setReferralRequest(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setReferralRequest(event.target.value)}
           placeholder="Please assess and advise regarding..."
         />
 
-        <h2 style={styles.heading}>
-          Attachments / Supporting
-          Information
-        </h2>
+        <h2 style={styles.heading}>Supporting Information</h2>
 
-        <div
-          style={styles.checkGrid}
-        >
+        <div style={styles.checkGrid}>
           <label style={styles.check}>
             <input
               type="checkbox"
-              checked={
-                includeConsultationSummary
-              }
-              onChange={(event) =>
-                setIncludeConsultationSummary(
-                  event.target
-                    .checked,
-                )
-              }
+              checked={includeConsultationSummary}
+              onChange={(event) => setIncludeConsultationSummary(event.target.checked)}
             />
             Consultation summary
           </label>
@@ -1827,12 +1382,7 @@ export default function ReferralPage() {
             <input
               type="checkbox"
               checked={includeLabs}
-              onChange={(event) =>
-                setIncludeLabs(
-                  event.target
-                    .checked,
-                )
-              }
+              onChange={(event) => setIncludeLabs(event.target.checked)}
             />
             Laboratory results
           </label>
@@ -1840,15 +1390,8 @@ export default function ReferralPage() {
           <label style={styles.check}>
             <input
               type="checkbox"
-              checked={
-                includeImaging
-              }
-              onChange={(event) =>
-                setIncludeImaging(
-                  event.target
-                    .checked,
-                )
-              }
+              checked={includeImaging}
+              onChange={(event) => setIncludeImaging(event.target.checked)}
             />
             Imaging / report
           </label>
@@ -1856,15 +1399,8 @@ export default function ReferralPage() {
           <label style={styles.check}>
             <input
               type="checkbox"
-              checked={
-                includePrescription
-              }
-              onChange={(event) =>
-                setIncludePrescription(
-                  event.target
-                    .checked,
-                )
-              }
+              checked={includePrescription}
+              onChange={(event) => setIncludePrescription(event.target.checked)}
             />
             Prescription
           </label>
@@ -1873,72 +1409,104 @@ export default function ReferralPage() {
             <input
               type="checkbox"
               checked={includeOther}
-              onChange={(event) =>
-                setIncludeOther(
-                  event.target
-                    .checked,
-                )
-              }
+              onChange={(event) => setIncludeOther(event.target.checked)}
             />
             Other
           </label>
         </div>
 
-        <h2 style={styles.heading}>
-          Additional Notes
-        </h2>
+        <h2 style={styles.heading}>Upload Attachments</h2>
 
+        <p style={styles.help}>
+          Attach clinical photos, pathology, imaging reports, prescriptions or other supporting files.
+          Maximum 10 files, 10 MB each.
+        </p>
+
+        <label style={styles.uploadButton}>
+          📎 Add Photo / Document
+          <input
+            type="file"
+            multiple
+            accept="image/*,.pdf,.doc,.docx,.txt,.csv"
+            onChange={handleFiles}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {pendingFiles.length > 0 && (
+          <div style={styles.fileList}>
+            {pendingFiles.map((file, index) => (
+              <div key={`${file.name}-${index}`} style={styles.fileRow}>
+                <div>
+                  <strong>{file.name}</strong>
+                  <div style={styles.help}>
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  style={styles.removeButton}
+                  onClick={() => removePendingFile(index)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {uploadedAttachments.length > 0 && (
+          <div style={styles.uploadedBox}>
+            <strong>Attached to referral</strong>
+            {uploadedAttachments.map((attachment) => (
+              <div key={attachment.id || attachment.storage_path}>
+                ✓ {attachment.file_name}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <h2 style={styles.heading}>Additional Notes</h2>
         <textarea
           style={styles.textareaSmall}
           value={additionalNotes}
-          onChange={(event) =>
-            setAdditionalNotes(
-              event.target.value,
-            )
-          }
+          onChange={(event) => setAdditionalNotes(event.target.value)}
           placeholder="Optional additional information."
         />
 
         <div style={styles.warning}>
-          The clinician remains
-          responsible for confirming the
-          diagnosis, ICD-10 code, urgency,
-          clinical information and
-          referral destination before
-          issuing the referral.
+          The clinician remains responsible for confirming the diagnosis,
+          ICD-10 code, urgency, clinical information and referral destination
+          before issuing the referral.
         </div>
 
         <div style={styles.actions}>
           <button
             type="button"
-            style={
-              styles.secondaryButton
-            }
-            disabled={saving}
-            onClick={() =>
-              void saveReferral(
-                "draft",
-              )
-            }
+            style={styles.secondaryButton}
+            disabled={saving || sending || uploadingAttachments}
+            onClick={() => void saveReferral("draft")}
           >
-            {saving
-              ? "Saving..."
-              : "Save Draft"}
+            {saving || uploadingAttachments ? "Saving..." : "Save Draft"}
           </button>
 
           <button
             type="button"
-            style={
-              styles.primaryButton
-            }
-            disabled={saving}
-            onClick={() =>
-              void issueAndPrint()
-            }
+            style={styles.printButton}
+            disabled={saving || sending || uploadingAttachments}
+            onClick={() => void issueAndPrint()}
           >
-            {saving
-              ? "Saving..."
-              : "Issue Referral + Print / PDF"}
+            Issue + Print / PDF
+          </button>
+
+          <button
+            type="button"
+            style={styles.sendButton}
+            disabled={saving || sending || uploadingAttachments}
+            onClick={() => void sendReferral()}
+          >
+            {sending ? "Sending Referral..." : "✉ Send Referral"}
           </button>
         </div>
       </section>
@@ -1946,156 +1514,146 @@ export default function ReferralPage() {
   );
 }
 
-const styles: Record<
-  string,
-  React.CSSProperties
-> = {
+const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     background: "#f3f4f6",
-    padding: "24px 14px 60px",
-    fontFamily:
-      "Arial, Helvetica, sans-serif",
+    padding: "20px 12px 60px",
+    fontFamily: "Arial, Helvetica, sans-serif",
   },
-
   card: {
     width: "100%",
     maxWidth: 1050,
     margin: "0 auto",
+    boxSizing: "border-box",
     background: "#ffffff",
-    borderRadius: 18,
-    padding: 24,
-    boxShadow:
-      "0 12px 35px rgba(0,0,0,.08)",
+    borderRadius: 22,
+    padding: "24px clamp(16px, 4vw, 30px)",
+    boxShadow: "0 12px 35px rgba(0,0,0,.08)",
   },
-
   back: {
     color: "#374151",
     textDecoration: "none",
     fontWeight: 700,
   },
-
   tabs: {
     display: "flex",
     flexWrap: "wrap",
     gap: 8,
-    margin: "18px 0 24px",
+    margin: "18px 0 28px",
   },
-
   tab: {
     textDecoration: "none",
     border: "1px solid #e5e7eb",
     color: "#374151",
-    padding: "9px 12px",
-    borderRadius: 10,
+    padding: "10px 14px",
+    borderRadius: 12,
     fontWeight: 700,
   },
-
   activeTab: {
     textDecoration: "none",
     background: "#f97316",
     color: "#ffffff",
-    padding: "9px 12px",
-    borderRadius: 10,
+    padding: "10px 14px",
+    borderRadius: 12,
     fontWeight: 800,
   },
-
   kicker: {
     color: "#f97316",
     fontWeight: 800,
     marginBottom: 4,
+    fontSize: 18,
   },
-
   title: {
-    fontSize: 34,
-    margin: "0 0 8px",
+    fontSize: "clamp(36px, 7vw, 52px)",
+    margin: "0 0 12px",
     color: "#111827",
   },
-
   subtitle: {
     color: "#6b7280",
     lineHeight: 1.6,
+    fontSize: 19,
     marginTop: 0,
   },
-
   info: {
     background: "#fff7ed",
     border: "1px solid #fed7aa",
-    padding: 12,
-    borderRadius: 10,
-    margin: "12px 0",
+    padding: 14,
+    borderRadius: 12,
+    margin: "14px 0",
+    fontSize: 17,
   },
-
   message: {
     background: "#ecfdf5",
     border: "1px solid #a7f3d0",
-    padding: 12,
-    borderRadius: 10,
-    margin: "12px 0",
-  },
-
-  heading: {
+    padding: 14,
+    borderRadius: 12,
+    margin: "14px 0",
     fontSize: 17,
-    margin: "24px 0 8px",
+  },
+  heading: {
+    fontSize: 20,
+    margin: "28px 0 10px",
     color: "#111827",
   },
-
   input: {
     width: "100%",
+    minWidth: 0,
     boxSizing: "border-box",
     border: "1px solid #d1d5db",
-    borderRadius: 10,
-    padding: "12px 13px",
-    fontSize: 15,
+    borderRadius: 12,
+    padding: "14px 15px",
+    fontSize: 16,
     background: "#ffffff",
   },
-
   textarea: {
     width: "100%",
     boxSizing: "border-box",
     border: "1px solid #d1d5db",
-    borderRadius: 10,
-    padding: 13,
-    minHeight: 115,
+    borderRadius: 12,
+    padding: 14,
+    minHeight: 120,
     resize: "vertical",
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: "inherit",
   },
-
   textareaSmall: {
     width: "100%",
     boxSizing: "border-box",
     border: "1px solid #d1d5db",
-    borderRadius: 10,
-    padding: 13,
-    minHeight: 80,
+    borderRadius: 12,
+    padding: 14,
+    minHeight: 90,
     resize: "vertical",
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: "inherit",
   },
-
+  searchRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    gap: 10,
+    alignItems: "stretch",
+  },
   grid2: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(280px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))",
     gap: 12,
   },
-
   patientCard: {
     display: "flex",
     width: "100%",
     flexDirection: "column",
     alignItems: "flex-start",
     gap: 4,
-    padding: 12,
-    marginTop: 7,
+    padding: 14,
+    marginTop: 8,
     background: "#ffffff",
     border: "1px solid #e5e7eb",
-    borderRadius: 10,
+    borderRadius: 12,
     cursor: "pointer",
     textAlign: "left",
+    fontSize: 15,
   },
-
   selected: {
     display: "flex",
     justifyContent: "space-between",
@@ -2108,7 +1666,6 @@ const styles: Record<
     marginTop: 12,
     lineHeight: 1.6,
   },
-
   summaryBox: {
     display: "flex",
     flexDirection: "column",
@@ -2117,18 +1674,41 @@ const styles: Record<
     border: "1px solid #e5e7eb",
     borderRadius: 12,
     padding: 14,
+    fontSize: 16,
   },
-
   help: {
     color: "#6b7280",
     fontSize: 13,
     marginTop: 0,
+    lineHeight: 1.5,
   },
-
+  allergyGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))",
+    gap: 10,
+  },
+  allergyOption: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    minHeight: 46,
+    border: "1px solid #d1d5db",
+    borderRadius: 12,
+    padding: "10px 12px",
+    background: "#ffffff",
+    cursor: "pointer",
+  },
+  allergySummary: {
+    marginTop: 12,
+    borderRadius: 12,
+    padding: 12,
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    color: "#991b1b",
+  },
   icdWrap: {
     position: "relative",
   },
-
   icdResults: {
     border: "1px solid #d1d5db",
     borderRadius: 10,
@@ -2136,10 +1716,8 @@ const styles: Record<
     maxHeight: 330,
     overflowY: "auto",
     background: "#ffffff",
-    boxShadow:
-      "0 10px 25px rgba(0,0,0,.08)",
+    boxShadow: "0 10px 25px rgba(0,0,0,.08)",
   },
-
   icdItem: {
     display: "flex",
     flexDirection: "column",
@@ -2148,17 +1726,14 @@ const styles: Record<
     width: "100%",
     padding: 11,
     border: 0,
-    borderBottom:
-      "1px solid #f3f4f6",
+    borderBottom: "1px solid #f3f4f6",
     background: "#ffffff",
     textAlign: "left",
     cursor: "pointer",
   },
-
   selectedIcd: {
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     gap: 12,
     alignItems: "center",
     background: "#ecfdf5",
@@ -2167,13 +1742,11 @@ const styles: Record<
     padding: 12,
     marginTop: 8,
   },
-
   checkGrid: {
     display: "flex",
     flexWrap: "wrap",
-    gap: 12,
+    gap: 10,
   },
-
   check: {
     display: "flex",
     alignItems: "center",
@@ -2182,52 +1755,114 @@ const styles: Record<
     borderRadius: 10,
     padding: "10px 12px",
   },
-
-  warning: {
-    marginTop: 22,
-    background: "#fffbeb",
-    border: "1px solid #fde68a",
-    borderRadius: 10,
-    padding: 12,
-    color: "#78350f",
-  },
-
-  actions: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 22,
-  },
-
-  primaryButton: {
-    border: 0,
-    borderRadius: 10,
-    padding: "12px 17px",
-    background: "#f97316",
-    color: "#ffffff",
+  uploadButton: {
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box",
+    textAlign: "center",
+    padding: "16px 18px",
+    borderRadius: 12,
+    background: "#ede9fe",
+    color: "#5b21b6",
+    border: "2px dashed #c4b5fd",
     fontWeight: 800,
     cursor: "pointer",
   },
-
+  fileList: {
+    display: "grid",
+    gap: 8,
+    marginTop: 12,
+  },
+  fileRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
+    border: "1px solid #e5e7eb",
+    background: "#f9fafb",
+  },
+  uploadedBox: {
+    display: "grid",
+    gap: 5,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    background: "#ecfdf5",
+    border: "1px solid #a7f3d0",
+  },
+  warning: {
+    marginTop: 24,
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    borderRadius: 12,
+    padding: 14,
+    color: "#78350f",
+    fontSize: 15,
+  },
+  actions: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
+    gap: 10,
+    marginTop: 24,
+  },
   secondaryButton: {
-    border:
-      "1px solid #d1d5db",
-    borderRadius: 10,
-    padding: "12px 17px",
+    border: "1px solid #d1d5db",
+    borderRadius: 12,
+    padding: "14px 16px",
     background: "#ffffff",
     color: "#111827",
     fontWeight: 800,
+    fontSize: 16,
     cursor: "pointer",
   },
-
+  printButton: {
+    border: 0,
+    borderRadius: 12,
+    padding: "14px 16px",
+    background: "#f97316",
+    color: "#ffffff",
+    fontWeight: 800,
+    fontSize: 16,
+    cursor: "pointer",
+  },
+  sendButton: {
+    border: 0,
+    borderRadius: 12,
+    padding: "14px 16px",
+    background: "#16a34a",
+    color: "#ffffff",
+    fontWeight: 800,
+    fontSize: 16,
+    cursor: "pointer",
+  },
   smallButton: {
-    border:
-      "1px solid #d1d5db",
+    border: "1px solid #d1d5db",
     borderRadius: 8,
     padding: "8px 10px",
     background: "#ffffff",
     fontWeight: 700,
     cursor: "pointer",
     whiteSpace: "nowrap",
+  },
+  smallDarkButton: {
+    border: 0,
+    borderRadius: 12,
+    padding: "0 18px",
+    minHeight: 48,
+    background: "#111827",
+    color: "#ffffff",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  removeButton: {
+    border: 0,
+    borderRadius: 8,
+    padding: "8px 10px",
+    background: "#fee2e2",
+    color: "#991b1b",
+    fontWeight: 700,
+    cursor: "pointer",
   },
 };
