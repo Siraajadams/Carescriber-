@@ -46,18 +46,12 @@ type DoctorProfile = {
   user_id?: string;
 };
 
-const icd10List = [
-  { code: "J06.9", description: "Acute upper respiratory infection, unspecified" },
-  { code: "J11.1", description: "Influenza with other respiratory manifestations" },
-  { code: "A09.9", description: "Gastroenteritis and colitis, unspecified" },
-  { code: "M54.5", description: "Low back pain" },
-  { code: "R51", description: "Headache" },
-  { code: "R50.9", description: "Fever, unspecified" },
-  { code: "Z76.9", description: "Person encountering health services in unspecified circumstances" },
-  { code: "K52.9", description: "Noninfective gastroenteritis and colitis, unspecified" },
-  { code: "N39.0", description: "Urinary tract infection, site not specified" },
-  { code: "M79.1", description: "Myalgia" },
-];
+type ICD10Code = {
+  id: number;
+  code: string;
+  description: string;
+  category: string | null;
+};
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -120,8 +114,12 @@ export default function SickNotePage() {
   const [unfitFrom, setUnfitFrom] = useState(today());
   const [unfitUntil, setUnfitUntil] = useState(today());
 
+  const icdSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [diagnosisSearch, setDiagnosisSearch] = useState("");
   const [selectedDiagnosis, setSelectedDiagnosis] = useState("");
+  const [icdSearchResults, setIcdSearchResults] = useState<ICD10Code[]>([]);
+  const [icdSearchLoading, setIcdSearchLoading] = useState(false);
   const [comments, setComments] = useState("");
   const [message, setMessage] = useState("");
   const [certificateNumber, setCertificateNumber] = useState(`CS-${Date.now()}`);
@@ -305,11 +303,68 @@ export default function SickNotePage() {
     );
   }, [patients, patientSearch, selectedPatient]);
 
-  const filteredIcd = useMemo(() => {
-    const q = diagnosisSearch.trim().toLowerCase();
-    if (!q) return icd10List;
-    return icd10List.filter((i) => `${i.code} ${i.description}`.toLowerCase().includes(q));
-  }, [diagnosisSearch]);
+  async function searchIcd10(query: string) {
+    const cleanQuery = query
+      .trim()
+      .replace(/[%_,()]/g, " ")
+      .replace(/\s+/g, " ");
+
+    if (cleanQuery.length < 2) {
+      setIcdSearchResults([]);
+      setIcdSearchLoading(false);
+      return;
+    }
+
+    setIcdSearchLoading(true);
+
+    const { data, error } = await supabase
+      .from("icd10_codes")
+      .select("id, code, description, category")
+      .eq("active", true)
+      .or(`code.ilike.%${cleanQuery}%,description.ilike.%${cleanQuery}%`)
+      .order("code")
+      .limit(20);
+
+    if (error) {
+      console.error("ICD-10 search error:", error);
+      setIcdSearchResults([]);
+      setMessage(
+        "ICD-10 search failed. Confirm the icd10_codes table and read policy are configured: " +
+          error.message
+      );
+    } else {
+      setIcdSearchResults((data || []) as ICD10Code[]);
+    }
+
+    setIcdSearchLoading(false);
+  }
+
+  function handleDiagnosisSearchChange(value: string) {
+    setDiagnosisSearch(value);
+    setSelectedDiagnosis("");
+
+    if (icdSearchTimerRef.current) {
+      clearTimeout(icdSearchTimerRef.current);
+    }
+
+    if (value.trim().length < 2) {
+      setIcdSearchResults([]);
+      setIcdSearchLoading(false);
+      return;
+    }
+
+    icdSearchTimerRef.current = setTimeout(() => {
+      void searchIcd10(value);
+    }, 300);
+  }
+
+  function selectDiagnosis(icd: ICD10Code) {
+    const value = `${icd.code} | ${icd.description}`;
+    setSelectedDiagnosis(value);
+    setDiagnosisSearch(value);
+    setIcdSearchResults([]);
+    setMessage("");
+  }
 
   const returnDate = addOneDay(unfitUntil);
 
@@ -846,9 +901,57 @@ export default function SickNotePage() {
         {returnDate && <div style={styles.info}>Return to work/school: {returnDate}</div>}
 
         <h2 style={styles.heading}>Diagnosis / ICD-10</h2>
-        <input style={styles.input} placeholder="Search ICD-10 code or diagnosis" value={diagnosisSearch} onChange={(e) => { setDiagnosisSearch(e.target.value); setSelectedDiagnosis(""); }} />
-        {diagnosisSearch && <div style={styles.icdBox}>{filteredIcd.map((item) => <button key={item.code} type="button" style={styles.icdItem} onClick={() => { const value = `${item.code} | ${item.description}`; setSelectedDiagnosis(value); setDiagnosisSearch(value); }}>{item.code} | {item.description}</button>)}</div>}
-        <textarea style={styles.textarea} placeholder="Additional comments" value={comments} onChange={(e) => setComments(e.target.value)} />
+        <input
+          style={styles.input}
+          placeholder="Search full ICD-10 list by code or diagnosis"
+          value={diagnosisSearch}
+          onChange={(e) => handleDiagnosisSearchChange(e.target.value)}
+          autoComplete="off"
+        />
+
+        {icdSearchLoading && (
+          <div style={styles.icdStatus}>Searching full ICD-10 list…</div>
+        )}
+
+        {!icdSearchLoading &&
+          diagnosisSearch.trim().length >= 2 &&
+          !selectedDiagnosis &&
+          icdSearchResults.length === 0 && (
+            <div style={styles.icdStatus}>
+              No matching active ICD-10 codes found.
+            </div>
+          )}
+
+        {icdSearchResults.length > 0 && (
+          <div style={styles.icdBox}>
+            {icdSearchResults.map((item) => (
+              <button
+                key={item.id || item.code}
+                type="button"
+                style={styles.icdItem}
+                onClick={() => selectDiagnosis(item)}
+              >
+                <strong>{item.code}</strong> | {item.description}
+                {item.category ? (
+                  <span style={styles.icdCategory}> · {item.category}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {selectedDiagnosis && (
+          <div style={styles.selectedDiagnosis}>
+            Selected ICD-10: {selectedDiagnosis}
+          </div>
+        )}
+
+        <textarea
+          style={styles.textarea}
+          placeholder="Additional comments"
+          value={comments}
+          onChange={(e) => setComments(e.target.value)}
+        />
 
         <h2 style={styles.heading}>Doctor Digital Signature</h2>
         <canvas ref={canvasRef} width={700} height={240} style={styles.canvas} onMouseDown={startDraw} onMouseUp={stopDraw} onMouseMove={draw} onMouseLeave={stopDraw} onTouchStart={startDraw} onTouchEnd={stopDraw} onTouchMove={draw} />
@@ -897,8 +1000,11 @@ const styles: Record<string, CSSProperties> = {
   clearSmall: { display: "block", marginTop: 10, border: 0, borderRadius: 12, background: "#fff", color: "#166534", padding: 10, fontWeight: 900 },
   info: { background: "#dcfce7", color: "#166534", padding: 14, borderRadius: 14, fontWeight: 900, marginTop: 16 },
   referralInfo: { background: "#dbeafe", color: "#1d4ed8", padding: 14, borderRadius: 14, fontWeight: 900, marginTop: 12 },
-  icdBox: { border: "1px solid #cbd5e1", borderRadius: 16, marginTop: 8, overflow: "hidden" },
-  icdItem: { display: "block", width: "100%", textAlign: "left", padding: 14, background: "#fff", border: 0, borderBottom: "1px solid #e2e8f0", fontSize: 16 },
+  icdBox: { border: "1px solid #cbd5e1", borderRadius: 16, marginTop: 8, overflow: "hidden", maxHeight: 360, overflowY: "auto" },
+  icdItem: { display: "block", width: "100%", textAlign: "left", padding: 14, background: "#fff", border: 0, borderBottom: "1px solid #e2e8f0", fontSize: 16, cursor: "pointer" },
+  icdStatus: { marginTop: 10, padding: 12, borderRadius: 12, background: "#f8fafc", color: "#64748b", fontWeight: 700 },
+  icdCategory: { color: "#64748b", fontSize: 14 },
+  selectedDiagnosis: { marginTop: 10, padding: 12, borderRadius: 12, background: "#dcfce7", color: "#166534", fontWeight: 800 },
   canvas: { width: "100%", height: 190, border: "2px dashed #cbd5e1", borderRadius: 18, background: "#fff", touchAction: "none" },
   preview: { marginTop: 28, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 20, fontSize: 17, lineHeight: 1.6 },
   lightButton: { width: "100%", border: 0, borderRadius: 18, padding: 16, background: "#dbeafe", color: "#1d4ed8", fontWeight: 900, fontSize: 18, marginTop: 14 },
