@@ -128,10 +128,91 @@ export default function SickNotePage() {
   const [hasSignature, setHasSignature] = useState(false);
 
   useEffect(() => {
-    loadPatients();
-    loadDoctor();
+    void loadPatients();
+    void loadDoctor();
     restoreLinkedContext();
+    void restorePatientFromUrl();
   }, []);
+
+  async function restorePatientFromUrl() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const patientIdParam = (params.get("patientId") || "").trim();
+
+      if (!patientIdParam) return;
+
+      /*
+       * The Consultation page opens Sick Note using:
+       * /sick-note?patientId=<patients.id>
+       *
+       * The old Sick Note page ignored this URL parameter, which is why
+       * the clinician had to search for the patient and re-enter the ID.
+       */
+      const looksLikeUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          patientIdParam
+        );
+
+      let query = supabase.from("patients").select("*");
+
+      if (looksLikeUuid) {
+        query = query.eq("id", patientIdParam);
+      } else {
+        query = query.or(
+          `patient_id.eq.${patientIdParam},id_number.eq.${patientIdParam}`
+        );
+      }
+
+      const { data, error } = await query.maybeSingle();
+
+      if (error) {
+        console.error("Could not load patient from Sick Note URL:", error);
+        setMessage(
+          "The selected patient could not be loaded automatically: " +
+            error.message
+        );
+        return;
+      }
+
+      if (!data) {
+        setMessage(
+          "The selected patient was not found. Please return to Consultation and select the patient again."
+        );
+        return;
+      }
+
+      const patient = data as Patient;
+      const name = `${patient.first_name || ""} ${
+        patient.surname || patient.last_name || ""
+      }`.trim();
+
+      setSelectedPatient(patient);
+      setPatientSearch(name);
+      setPatientName(name);
+      setPatientId(patient.id_number || patient.patient_id || "");
+      setPatientEmail(patient.email || "");
+
+      /*
+       * Keep the same patient available when moving between
+       * Consultation, Sick Note and eScript.
+       */
+      localStorage.setItem(
+        "carescriber_selected_patient",
+        JSON.stringify(patient)
+      );
+      localStorage.setItem(
+        "carescriber_selected_patient_id",
+        patient.id
+      );
+
+      setMessage("");
+    } catch (error) {
+      console.error("Could not restore patient from URL:", error);
+      setMessage(
+        "The selected patient could not be restored automatically."
+      );
+    }
+  }
 
   function restoreLinkedContext() {
     try {
@@ -874,11 +955,34 @@ export default function SickNotePage() {
           </button>
         ))}
 
-        {selectedPatient && <div style={styles.selected}>Selected: {patientName} · ID: {patientId}<button type="button" onClick={clearPatient} style={styles.clearSmall}>Change Patient</button></div>}
+        {selectedPatient && (
+          <div style={styles.selected}>
+            Selected: {patientName} · ID: {patientId || "Not captured"}
+            <div style={styles.autoLinkedText}>
+              Patient details loaded automatically from CareScriber.
+            </div>
+            <button
+              type="button"
+              onClick={clearPatient}
+              style={styles.clearSmall}
+            >
+              Change Patient
+            </button>
+          </div>
+        )}
 
         <h2 style={styles.heading}>Patient Details</h2>
         <input style={styles.input} placeholder="Patient full name" value={patientName} onChange={(e) => setPatientName(e.target.value)} />
-        <input style={styles.input} placeholder="Patient ID / passport number" value={patientId} onChange={(e) => setPatientId(e.target.value)} />
+        <input
+          style={{
+            ...styles.input,
+            ...(selectedPatient ? styles.readOnlyInput : {}),
+          }}
+          placeholder="Patient ID / passport number"
+          value={patientId}
+          onChange={(e) => setPatientId(e.target.value)}
+          readOnly={Boolean(selectedPatient)}
+        />
         <input style={styles.input} placeholder="Employer email" value={employerEmail} onChange={(e) => setEmployerEmail(e.target.value)} />
         <input style={styles.input} placeholder="Patient email for CC" value={patientEmail} onChange={(e) => setPatientEmail(e.target.value)} />
 
@@ -998,6 +1102,8 @@ const styles: Record<string, CSSProperties> = {
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginTop: 10, display: "grid", gap: 6, fontSize: 17 },
   selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
   clearSmall: { display: "block", marginTop: 10, border: 0, borderRadius: 12, background: "#fff", color: "#166534", padding: 10, fontWeight: 900 },
+  autoLinkedText: { marginTop: 6, fontSize: 14, fontWeight: 700, color: "#15803d" },
+  readOnlyInput: { background: "#f8fafc", color: "#334155" },
   info: { background: "#dcfce7", color: "#166534", padding: 14, borderRadius: 14, fontWeight: 900, marginTop: 16 },
   referralInfo: { background: "#dbeafe", color: "#1d4ed8", padding: 14, borderRadius: 14, fontWeight: 900, marginTop: 12 },
   icdBox: { border: "1px solid #cbd5e1", borderRadius: 16, marginTop: 8, overflow: "hidden", maxHeight: 360, overflowY: "auto" },
