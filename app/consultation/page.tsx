@@ -245,6 +245,13 @@ export default function ConsultationPage() {
     setSelectedPatient(p);
     setSearch(`${p.first_name} ${patientSurname(p)}`.trim());
     setMessage("");
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(
+        "carescriber_selected_patient_id",
+        p.id,
+      );
+    }
   }
 
   async function searchCareScriberPatients() {
@@ -405,6 +412,13 @@ export default function ConsultationPage() {
     setPhotoNote("");
     setImageAnalysis("");
     setMessage("");
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(
+        "carescriber_selected_patient_id",
+      );
+    }
+
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -694,6 +708,16 @@ REFERRAL / PRESCRIPTION
           <Link href="/consultation" style={styles.activeTab}>Consultation</Link>
           <Link href="/sick-note" style={styles.sickTab}>Sick Note</Link>
           <Link href="/e-script" style={styles.escriptTab}>eScript</Link>
+          <Link
+            href={
+              selectedPatient
+                ? `/referral?patientId=${encodeURIComponent(selectedPatient.id)}`
+                : "/referral"
+            }
+            style={styles.referralTab}
+          >
+            Referral
+          </Link>
         </div>
 
         {isInAppBrowser && (
@@ -790,17 +814,24 @@ REFERRAL / PRESCRIPTION
         {selectedPatient && (
           <div style={styles.actionGrid}>
             <Link
-              href={`/sick-note?patientId=${selectedPatient.id}`}
+              href={`/sick-note?patientId=${encodeURIComponent(selectedPatient.id)}`}
               style={styles.sickNoteButton}
             >
               Create Sick Note for Selected Patient
             </Link>
 
             <Link
-              href={`/e-script?patientId=${selectedPatient.id}`}
+              href={`/e-script?patientId=${encodeURIComponent(selectedPatient.id)}`}
               style={styles.escriptButton}
             >
               Create eScript for Selected Patient
+            </Link>
+
+            <Link
+              href={`/referral?patientId=${encodeURIComponent(selectedPatient.id)}`}
+              style={styles.referralButton}
+            >
+              Create Referral for Selected Patient
             </Link>
           </div>
         )}
@@ -913,6 +944,7 @@ const styles: Record<string, CSSProperties> = {
   activeTab: { padding: "12px 14px", borderRadius: 14, background: "#2563eb", color: "#fff", textDecoration: "none", fontWeight: 900 },
   sickTab: { padding: "12px 14px", borderRadius: 14, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900 },
   escriptTab: { padding: "12px 14px", borderRadius: 14, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900 },
+  referralTab: { padding: "12px 14px", borderRadius: 14, background: "#7c3aed", color: "#fff", textDecoration: "none", fontWeight: 900 },
   warning: { background: "#fff7ed", color: "#9a3412", padding: 16, borderRadius: 16, fontWeight: 800, marginTop: 18 },
   divider: { border: 0, borderTop: "1px solid #e2e8f0", margin: "32px 0" },
   heading: { fontSize: 34, fontWeight: 900, marginBottom: 18 },
@@ -925,6 +957,7 @@ const styles: Record<string, CSSProperties> = {
   actionGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 },
   sickNoteButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
   escriptButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
+  referralButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#7c3aed", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
   checkRow: { display: "flex", gap: 14, alignItems: "flex-start", fontSize: 20, lineHeight: 1.4 },
   startButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#16a34a", color: "#fff", fontSize: 22, fontWeight: 900, marginBottom: 14 },
   stopButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#dc2626", color: "#fff", fontSize: 22, fontWeight: 900 },
