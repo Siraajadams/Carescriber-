@@ -6,9 +6,13 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 type MessageType = "error" | "success" | "";
+type ClinicianType = "Doctor" | "Dentist";
 
 export default function RegisterDoctorPage() {
   const router = useRouter();
+
+  const [clinicianType, setClinicianType] =
+    useState<ClinicianType>("Doctor");
 
   const [firstName, setFirstName] = useState("");
   const [surname, setSurname] = useState("");
@@ -20,15 +24,18 @@ export default function RegisterDoctorPage() {
   const [practiceNumber, setPracticeNumber] = useState("");
   const [practiceAddress, setPracticeAddress] = useState("");
   const [country, setCountry] = useState("South Africa");
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] =
+    useState(false);
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState<MessageType>("");
+  const [messageType, setMessageType] =
+    useState<MessageType>("");
 
   function showError(text: string) {
     setMessageType("error");
@@ -44,7 +51,29 @@ export default function RegisterDoctorPage() {
     return value.replace(/[^\d+]/g, "").trim();
   }
 
-  async function registerDoctor(e: React.FormEvent<HTMLFormElement>) {
+  function handleClinicianTypeChange(value: ClinicianType) {
+    setClinicianType(value);
+
+    if (value === "Dentist") {
+      if (
+        speciality === "General Practitioner" ||
+        speciality.trim() === ""
+      ) {
+        setSpeciality("General Dentist");
+      }
+    } else {
+      if (
+        speciality === "General Dentist" ||
+        speciality.trim() === ""
+      ) {
+        setSpeciality("General Practitioner");
+      }
+    }
+  }
+
+  async function registerDoctor(
+    e: React.FormEvent<HTMLFormElement>
+  ) {
     e.preventDefault();
 
     if (loading) return;
@@ -56,13 +85,27 @@ export default function RegisterDoctorPage() {
     const cleanSurname = surname.trim();
     const cleanEmail = email.trim().toLowerCase();
     const cleanMobile = normaliseMobile(mobile);
-    const cleanRegistrationNumber = registrationNumber.trim();
+
+    const cleanRegistrationNumber =
+      registrationNumber.trim();
+
     const cleanQualifications = qualifications.trim();
-    const cleanSpeciality = speciality.trim();
+
+    const cleanSpeciality =
+      speciality.trim() ||
+      (clinicianType === "Dentist"
+        ? "General Dentist"
+        : "General Practitioner");
+
     const cleanPracticeNumber = practiceNumber.trim();
     const cleanPracticeAddress = practiceAddress.trim();
-    const cleanPassword = password.trim();
-    const cleanConfirmPassword = confirmPassword.trim();
+
+    /*
+     * Do NOT trim passwords.
+     * A password may legitimately contain spaces.
+     */
+    const cleanPassword = password;
+    const cleanConfirmPassword = confirmPassword;
 
     if (
       !cleanFirstName ||
@@ -79,13 +122,18 @@ export default function RegisterDoctorPage() {
       return;
     }
 
-    if (!cleanEmail.includes("@")) {
+    if (
+      !cleanEmail.includes("@") ||
+      !cleanEmail.includes(".")
+    ) {
       showError("Please enter a valid email address.");
       return;
     }
 
     if (cleanPassword.length < 6) {
-      showError("Password must contain at least 6 characters.");
+      showError(
+        "Password must contain at least 6 characters."
+      );
       return;
     }
 
@@ -98,33 +146,88 @@ export default function RegisterDoctorPage() {
 
     try {
       /*
-       * The doctor details are added to Auth metadata as a backup.
+       * IMPORTANT
        *
-       * The main profile record is still stored in the profiles table.
+       * All clinician information is placed into
+       * Supabase Auth metadata.
+       *
+       * The Supabase database trigger
+       * public.handle_new_user() creates the profiles row.
+       *
+       * We intentionally DO NOT insert into profiles
+       * directly from the browser during registration.
+       *
+       * This prevents:
+       *
+       * "new row violates row-level security policy
+       * for table profiles"
+       *
+       * when email verification is enabled and there
+       * is not yet an authenticated session.
        */
+
       const { data: signUpData, error: signUpError } =
         await supabase.auth.signUp({
           email: cleanEmail,
           password: cleanPassword,
+
           options: {
             data: {
               first_name: cleanFirstName,
               surname: cleanSurname,
               mobile: cleanMobile,
 
-              // Keep this field name aligned with the profiles table.
-              registration_number: cleanRegistrationNumber,
-              doctor_qualifications: cleanQualifications,
-              speciality: cleanSpeciality || "General Practitioner",
-              practice_number: cleanPracticeNumber,
-              practice_address: cleanPracticeAddress,
+              registration_number:
+                cleanRegistrationNumber,
+
+              doctor_qualifications:
+                cleanQualifications,
+
+              speciality: cleanSpeciality,
+
+              practice_number:
+                cleanPracticeNumber,
+
+              practice_address:
+                cleanPracticeAddress,
+
               country,
+
+              /*
+               * Keep role = doctor so existing CareScriber
+               * doctor permissions/dashboard continue working.
+               *
+               * profession tells us whether the clinician
+               * is a Doctor or Dentist.
+               */
               role: "doctor",
+              profession:
+                clinicianType === "Dentist"
+                  ? "dentist"
+                  : "doctor",
+
+              clinician_type: clinicianType,
             },
           },
         });
 
       if (signUpError) {
+        console.error(
+          "Supabase sign-up error:",
+          signUpError
+        );
+
+        if (
+          signUpError.message
+            .toLowerCase()
+            .includes("already registered")
+        ) {
+          showError(
+            "This email address is already registered. Please log in instead."
+          );
+          return;
+        }
+
         showError(signUpError.message);
         return;
       }
@@ -133,117 +236,93 @@ export default function RegisterDoctorPage() {
 
       if (!user?.id) {
         showError(
-          "The authentication account was created, but no user ID was returned."
+          "The account could not be created because Supabase did not return a user ID."
         );
         return;
       }
 
+      console.log(
+        "CareScriber clinician account created:",
+        {
+          userId: user.id,
+          clinicianType,
+          email: cleanEmail,
+        }
+      );
+
       /*
-       * Save the doctor's permanent profile.
+       * If email confirmation is enabled:
        *
-       * onConflict: "id" ensures the record is updated if the same authenticated
-       * user already has a profile.
-       */
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .upsert(
-          {
-            id: user.id,
-            first_name: cleanFirstName,
-            surname: cleanSurname,
-            email: cleanEmail,
-            mobile: cleanMobile,
-            registration_number: cleanRegistrationNumber,
-            doctor_qualifications: cleanQualifications,
-            speciality: cleanSpeciality || "General Practitioner",
-            practice_number: cleanPracticeNumber,
-            practice_address: cleanPracticeAddress,
-            country,
-            role: "doctor",
-            updated_at: new Date().toISOString(),
-          },
-          {
-            onConflict: "id",
-          }
-        );
-
-      if (profileError) {
-        console.error("Doctor profile save error:", profileError);
-
-        showError(
-          `The login account was created, but the doctor profile could not be saved: ${profileError.message}`
-        );
-
-        return;
-      }
-
-      /*
-       * Confirm that the profile can be retrieved immediately.
-       */
-      const { data: savedProfile, error: verificationError } = await supabase
-        .from("profiles")
-        .select(
-          `
-            id,
-            first_name,
-            surname,
-            email,
-            mobile,
-            registration_number,
-            doctor_qualifications,
-            speciality,
-            practice_number,
-            practice_address,
-            country,
-            role
-          `
-        )
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (verificationError) {
-        console.error(
-          "Doctor profile verification error:",
-          verificationError
-        );
-
-        showError(
-          `The profile was submitted, but CareScriber could not verify it: ${verificationError.message}`
-        );
-
-        return;
-      }
-
-      if (!savedProfile) {
-        showError(
-          "The doctor account was created, but no profile record could be retrieved. Check the profiles table and its Row Level Security policies."
-        );
-        return;
-      }
-
-      /*
-       * When email confirmation is enabled, Supabase may return a user without
-       * an active session. The user must confirm their email before signing in.
+       * signUpData.session will normally be null.
+       *
+       * DO NOT attempt a profiles insert here.
+       * The database trigger creates the row safely.
        */
       if (!signUpData.session) {
         showSuccess(
-          "Doctor registration completed. Please check your email to confirm your account before logging in."
+          `${clinicianType} registration completed. Please check your email and confirm your account before logging in.`
         );
 
         window.setTimeout(() => {
-          router.push("/login?registered=true&confirmation=required");
-        }, 2200);
+          router.push(
+            "/login?registered=true&confirmation=required"
+          );
+        }, 2500);
 
         return;
       }
 
-      showSuccess("Doctor registration completed successfully.");
+      /*
+       * Email confirmation disabled:
+       * user already has an authenticated session.
+       *
+       * We can optionally check whether the database
+       * trigger created the profile.
+       */
+      const {
+        data: savedProfile,
+        error: profileCheckError,
+      } = await supabase
+        .from("profiles")
+        .select("id, first_name, surname, email, role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileCheckError) {
+        /*
+         * Don't fail registration because the Auth account
+         * has already been successfully created.
+         */
+        console.warn(
+          "Profile verification warning:",
+          profileCheckError
+        );
+      }
+
+      if (!savedProfile) {
+        console.warn(
+          "Auth user created but profile trigger did not return a profile. Check public.handle_new_user()."
+        );
+      }
+
+      /*
+       * Sign out after registration so the clinician
+       * enters CareScriber through the normal login flow.
+       */
+      await supabase.auth.signOut();
+
+      showSuccess(
+        `${clinicianType} registration completed successfully. You can now log in.`
+      );
 
       window.setTimeout(() => {
         router.push("/login?registered=true");
-      }, 1200);
+      }, 1600);
     } catch (error) {
-      console.error("Unexpected registration error:", error);
+      console.error(
+        "Unexpected registration error:",
+        error
+      );
 
       showError(
         error instanceof Error
@@ -262,25 +341,96 @@ export default function RegisterDoctorPage() {
           ← Back to CareScriber
         </Link>
 
-        <p style={styles.label}>Videomed Clinical Assistant</p>
-
-        <h1 style={styles.title}>Register Doctor</h1>
-
-        <p style={styles.subtitle}>
-          Create your clinician profile for CareScriber AI. These details will
-          be used on prescriptions, sick notes and clinical documents.
+        <p style={styles.label}>
+          Videomed Clinical Assistant
         </p>
 
-        <form onSubmit={registerDoctor} style={styles.form}>
+        <h1 style={styles.title}>
+          Register Clinician
+        </h1>
+
+        <p style={styles.subtitle}>
+          Create your CareScriber clinician profile.
+          Your professional details will be used on
+          prescriptions, clinical records and other
+          clinical documents.
+        </p>
+
+        <form
+          onSubmit={registerDoctor}
+          style={styles.form}
+        >
+          {/* CLINICIAN TYPE */}
+
+          <label style={styles.field}>
+            <span style={styles.fieldLabel}>
+              Clinician type *
+            </span>
+
+            <div style={styles.typeGrid}>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() =>
+                  handleClinicianTypeChange("Doctor")
+                }
+                style={{
+                  ...styles.typeButton,
+                  ...(clinicianType === "Doctor"
+                    ? styles.typeButtonSelected
+                    : {}),
+                }}
+              >
+                <span style={styles.typeIcon}>🩺</span>
+
+                <span>
+                  <strong>Medical Doctor</strong>
+                  <small style={styles.typeDescription}>
+                    GP or medical specialist
+                  </small>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() =>
+                  handleClinicianTypeChange("Dentist")
+                }
+                style={{
+                  ...styles.typeButton,
+                  ...(clinicianType === "Dentist"
+                    ? styles.typeButtonSelected
+                    : {}),
+                }}
+              >
+                <span style={styles.typeIcon}>🦷</span>
+
+                <span>
+                  <strong>Dentist</strong>
+                  <small style={styles.typeDescription}>
+                    Dental practitioner
+                  </small>
+                </span>
+              </button>
+            </div>
+          </label>
+
+          {/* NAME */}
+
           <div style={styles.grid}>
             <label style={styles.field}>
-              <span style={styles.fieldLabel}>First name *</span>
+              <span style={styles.fieldLabel}>
+                First name *
+              </span>
 
               <input
                 style={styles.input}
                 placeholder="First name"
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) =>
+                  setFirstName(e.target.value)
+                }
                 autoComplete="given-name"
                 disabled={loading}
                 required
@@ -288,13 +438,17 @@ export default function RegisterDoctorPage() {
             </label>
 
             <label style={styles.field}>
-              <span style={styles.fieldLabel}>Surname *</span>
+              <span style={styles.fieldLabel}>
+                Surname *
+              </span>
 
               <input
                 style={styles.input}
                 placeholder="Surname"
                 value={surname}
-                onChange={(e) => setSurname(e.target.value)}
+                onChange={(e) =>
+                  setSurname(e.target.value)
+                }
                 autoComplete="family-name"
                 disabled={loading}
                 required
@@ -302,15 +456,21 @@ export default function RegisterDoctorPage() {
             </label>
           </div>
 
+          {/* EMAIL */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Email *</span>
+            <span style={styles.fieldLabel}>
+              Email *
+            </span>
 
             <input
               style={styles.input}
               type="email"
-              placeholder="Doctor email address"
+              placeholder="Clinician email address"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) =>
+                setEmail(e.target.value)
+              }
               autoComplete="email"
               inputMode="email"
               disabled={loading}
@@ -318,15 +478,21 @@ export default function RegisterDoctorPage() {
             />
           </label>
 
+          {/* MOBILE */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Mobile *</span>
+            <span style={styles.fieldLabel}>
+              Mobile *
+            </span>
 
             <input
               style={styles.input}
               type="tel"
-              placeholder="Doctor mobile number"
+              placeholder="Clinician mobile number"
               value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
+              onChange={(e) =>
+                setMobile(e.target.value)
+              }
               autoComplete="tel"
               inputMode="tel"
               disabled={loading}
@@ -334,129 +500,175 @@ export default function RegisterDoctorPage() {
             />
           </label>
 
+          {/* REGISTRATION */}
+
           <label style={styles.field}>
             <span style={styles.fieldLabel}>
-              HPCSA / registration number *
+              {country === "South Africa"
+                ? clinicianType === "Dentist"
+                  ? "HPCSA dental registration number *"
+                  : "HPCSA registration number *"
+                : "Professional registration number *"}
             </span>
 
             <input
               style={styles.input}
-              placeholder="HPCSA or professional council number"
+              placeholder={
+                country === "South Africa"
+                  ? "HPCSA registration number"
+                  : "Professional council registration number"
+              }
               value={registrationNumber}
-              onChange={(e) => setRegistrationNumber(e.target.value)}
+              onChange={(e) =>
+                setRegistrationNumber(e.target.value)
+              }
               disabled={loading}
               required
             />
           </label>
 
+          {/* QUALIFICATIONS */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Qualifications *</span>
+            <span style={styles.fieldLabel}>
+              Qualifications *
+            </span>
 
             <input
               style={styles.input}
-              placeholder="Example: MBChB, MMed, FCFP"
+              placeholder={
+                clinicianType === "Dentist"
+                  ? "Example: BChD, BDS"
+                  : "Example: MBChB, MMed, FCFP"
+              }
               value={qualifications}
-              onChange={(e) => setQualifications(e.target.value)}
+              onChange={(e) =>
+                setQualifications(e.target.value)
+              }
               disabled={loading}
               required
             />
           </label>
 
+          {/* SPECIALITY */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Speciality</span>
+            <span style={styles.fieldLabel}>
+              Speciality
+            </span>
 
             <input
               style={styles.input}
-              placeholder="Example: General Practitioner"
+              placeholder={
+                clinicianType === "Dentist"
+                  ? "Example: General Dentist"
+                  : "Example: General Practitioner"
+              }
               value={speciality}
-              onChange={(e) => setSpeciality(e.target.value)}
+              onChange={(e) =>
+                setSpeciality(e.target.value)
+              }
               disabled={loading}
             />
           </label>
 
+          {/* PRACTICE NUMBER */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Practice number *</span>
+            <span style={styles.fieldLabel}>
+              Practice number *
+            </span>
 
             <input
               style={styles.input}
-              placeholder="Practice number"
+              placeholder="Practice / BHF number"
               value={practiceNumber}
-              onChange={(e) => setPracticeNumber(e.target.value)}
+              onChange={(e) =>
+                setPracticeNumber(e.target.value)
+              }
               disabled={loading}
               required
             />
           </label>
 
+          {/* ADDRESS */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Practice address</span>
+            <span style={styles.fieldLabel}>
+              Practice address
+            </span>
 
             <textarea
               style={styles.textarea}
               placeholder="Practice address"
               value={practiceAddress}
-              onChange={(e) => setPracticeAddress(e.target.value)}
+              onChange={(e) =>
+                setPracticeAddress(e.target.value)
+              }
               rows={3}
               disabled={loading}
             />
           </label>
 
+          {/* COUNTRY */}
+
           <label style={styles.field}>
-            <span style={styles.fieldLabel}>Country *</span>
+            <span style={styles.fieldLabel}>
+              Country *
+            </span>
 
             <select
               style={styles.input}
               value={country}
-              onChange={(e) => setCountry(e.target.value)}
+              onChange={(e) =>
+                setCountry(e.target.value)
+              }
               disabled={loading}
               required
             >
-              <option value="South Africa">South Africa</option>
-              <option value="England">England</option>
-              <option value="Wales">Wales</option>
-              <option value="Scotland">Scotland</option>
-              <option value="New Zealand">New Zealand</option>
+              <option value="South Africa">
+                South Africa
+              </option>
+
+              <option value="England">
+                England
+              </option>
+
+              <option value="Wales">
+                Wales
+              </option>
+
+              <option value="Scotland">
+                Scotland
+              </option>
+
+              <option value="New Zealand">
+                New Zealand
+              </option>
             </select>
           </label>
 
+          {/* PASSWORD */}
+
           <div style={styles.grid}>
             <label style={styles.field}>
-              <span style={styles.fieldLabel}>Password *</span>
+              <span style={styles.fieldLabel}>
+                Password *
+              </span>
 
               <div style={styles.passwordWrap}>
                 <input
                   style={styles.passwordInput}
-                  type={showPassword ? "text" : "password"}
+                  type={
+                    showPassword
+                      ? "text"
+                      : "password"
+                  }
                   placeholder="Password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="new-password"
-                  disabled={loading}
-                  minLength={6}
-                  required
-                />
-
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((current) => !current)}
-                  style={styles.eyeButton}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  disabled={loading}
-                >
-                  {showPassword ? "🙈" : "👁️"}
-                </button>
-              </div>
-            </label>
-
-            <label style={styles.field}>
-              <span style={styles.fieldLabel}>Confirm password *</span>
-
-              <div style={styles.passwordWrap}>
-                <input
-                  style={styles.passwordInput}
-                  type={showConfirmPassword ? "text" : "password"}
-                  placeholder="Confirm password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onChange={(e) =>
+                    setPassword(e.target.value)
+                  }
                   autoComplete="new-password"
                   disabled={loading}
                   minLength={6}
@@ -466,7 +678,53 @@ export default function RegisterDoctorPage() {
                 <button
                   type="button"
                   onClick={() =>
-                    setShowConfirmPassword((current) => !current)
+                    setShowPassword(
+                      (current) => !current
+                    )
+                  }
+                  style={styles.eyeButton}
+                  aria-label={
+                    showPassword
+                      ? "Hide password"
+                      : "Show password"
+                  }
+                  disabled={loading}
+                >
+                  {showPassword ? "🙈" : "👁️"}
+                </button>
+              </div>
+            </label>
+
+            <label style={styles.field}>
+              <span style={styles.fieldLabel}>
+                Confirm password *
+              </span>
+
+              <div style={styles.passwordWrap}>
+                <input
+                  style={styles.passwordInput}
+                  type={
+                    showConfirmPassword
+                      ? "text"
+                      : "password"
+                  }
+                  placeholder="Confirm password"
+                  value={confirmPassword}
+                  onChange={(e) =>
+                    setConfirmPassword(e.target.value)
+                  }
+                  autoComplete="new-password"
+                  disabled={loading}
+                  minLength={6}
+                  required
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowConfirmPassword(
+                      (current) => !current
+                    )
                   }
                   style={styles.eyeButton}
                   aria-label={
@@ -476,11 +734,15 @@ export default function RegisterDoctorPage() {
                   }
                   disabled={loading}
                 >
-                  {showConfirmPassword ? "🙈" : "👁️"}
+                  {showConfirmPassword
+                    ? "🙈"
+                    : "👁️"}
                 </button>
               </div>
             </label>
           </div>
+
+          {/* MESSAGE */}
 
           {message && (
             <div
@@ -495,21 +757,30 @@ export default function RegisterDoctorPage() {
             </div>
           )}
 
+          {/* SUBMIT */}
+
           <button
             type="submit"
             disabled={loading}
             style={{
               ...styles.button,
-              ...(loading ? styles.buttonDisabled : {}),
+              ...(loading
+                ? styles.buttonDisabled
+                : {}),
             }}
           >
-            {loading ? "Registering doctor..." : "Register Doctor"}
+            {loading
+              ? `Registering ${clinicianType.toLowerCase()}...`
+              : `Register ${clinicianType}`}
           </button>
         </form>
 
         <p style={styles.footer}>
           Already registered?{" "}
-          <Link href="/login" style={styles.link}>
+          <Link
+            href="/login"
+            style={styles.link}
+          >
             Login here
           </Link>
         </p>
@@ -518,7 +789,10 @@ export default function RegisterDoctorPage() {
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<
+  string,
+  React.CSSProperties
+> = {
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
@@ -535,7 +809,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#ffffff",
     borderRadius: "24px",
     padding: "28px",
-    boxShadow: "0 20px 40px rgba(15, 23, 42, 0.12)",
+    boxShadow:
+      "0 20px 40px rgba(15, 23, 42, 0.12)",
   },
 
   backLink: {
@@ -574,8 +849,49 @@ const styles: Record<string, React.CSSProperties> = {
 
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gridTemplateColumns:
+      "repeat(auto-fit, minmax(220px, 1fr))",
     gap: "14px",
+  },
+
+  typeGrid: {
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: "12px",
+  },
+
+  typeButton: {
+    minHeight: "78px",
+    padding: "14px 16px",
+    borderRadius: "14px",
+    border: "2px solid #cbd5e1",
+    background: "#ffffff",
+    color: "#334155",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    textAlign: "left",
+    fontSize: "16px",
+  },
+
+  typeButtonSelected: {
+    border: "2px solid #2563eb",
+    background: "#eff6ff",
+    color: "#1d4ed8",
+  },
+
+  typeIcon: {
+    fontSize: "28px",
+  },
+
+  typeDescription: {
+    display: "block",
+    marginTop: "4px",
+    color: "#64748b",
+    fontWeight: 400,
+    fontSize: "13px",
   },
 
   field: {
