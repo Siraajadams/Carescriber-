@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 type Patient = {
@@ -136,8 +135,6 @@ function escapeHtml(value: string) {
 }
 
 export default function ReferralPage() {
-  const searchParams = useSearchParams();
-
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
 
@@ -184,6 +181,11 @@ export default function ReferralPage() {
 
   const [referralNumber, setReferralNumber] = useState("");
 
+  const getQueryParam = (name: string) => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get(name);
+  };
+
   useEffect(() => {
     setReferralNumber(generateReferralNumber());
 
@@ -211,7 +213,7 @@ export default function ReferralPage() {
 
       setPatients(rows);
 
-      const queryPatientId = searchParams.get("patientId");
+      const queryPatientId = getQueryParam("patientId");
 
       const storedPatientId =
         typeof window !== "undefined"
@@ -504,10 +506,10 @@ export default function ReferralPage() {
         patient_email: selectedPatient!.email || null,
 
         consultation_id:
-          searchParams.get("consultationId") || null,
+          getQueryParam("consultationId") || null,
 
         symptomai_referral_id:
-          searchParams.get("referralId") || null,
+          getQueryParam("referralId") || null,
 
         referred_by_user_id: user?.id || null,
 
