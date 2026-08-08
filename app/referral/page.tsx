@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 
 type Patient = {
@@ -216,6 +217,7 @@ export default function ReferralPage() {
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState("");
+  const [operationMessage, setOperationMessage] = useState("");
   const [referralNumber, setReferralNumber] = useState("");
 
   const getQueryParam = (name: string) => {
@@ -957,27 +959,209 @@ export default function ReferralPage() {
 </html>`;
   }
 
-  async function issueAndPrint() {
-    const saved = await saveReferral("issued");
-    if (!saved) return;
 
-    const html = buildLetterHtml();
+  function buildReferralPdf() {
+    if (!selectedPatient) {
+      throw new Error("Please select a patient before creating the PDF.");
+    }
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 18;
+    const contentWidth = pageWidth - margin * 2;
+    let y = 18;
+
+    const addText = (
+      text: string,
+      options?: { bold?: boolean; size?: number; heading?: boolean; gap?: number },
+    ) => {
+      const size = options?.size ?? 10;
+      doc.setFont("helvetica", options?.bold ? "bold" : "normal");
+      doc.setFontSize(size);
+
+      if (options?.heading) {
+        if (y > 270) {
+          doc.addPage();
+          y = 18;
+        }
+        doc.setDrawColor(220);
+        doc.line(margin, y + 1, pageWidth - margin, y + 1);
+        y += 5;
+      }
+
+      const lines = doc.splitTextToSize(text || "Not recorded", contentWidth);
+
+      if (y + lines.length * 5 > 280) {
+        doc.addPage();
+        y = 18;
+      }
+
+      doc.text(lines, margin, y);
+      y += lines.length * 5 + (options?.gap ?? 3);
+    };
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(249, 115, 22);
+    doc.text("CareScriber AI", pageWidth / 2, y, { align: "center" });
+
+    y += 8;
+    doc.setTextColor(17, 24, 39);
+    doc.setFontSize(20);
+    doc.text("Medical Referral", pageWidth / 2, y, { align: "center" });
+
+    y += 7;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(
+      `Reference: ${referralNumber} | Date: ${new Date().toLocaleDateString("en-ZA")}`,
+      pageWidth / 2,
+      y,
+      { align: "center" },
+    );
+
+    y += 8;
+    doc.setDrawColor(249, 115, 22);
+    doc.setLineWidth(0.8);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 8;
+
+    addText(`Patient: ${patientName(selectedPatient)}`, { bold: true });
+    addText(`ID / Passport: ${patientIdentifier(selectedPatient) || "Not recorded"}`);
+    addText(
+      `DOB: ${formatDateZA(patientDob(selectedPatient)) || "Not recorded"}${
+        calculateAge(patientDob(selectedPatient))
+          ? ` | Age: ${calculateAge(patientDob(selectedPatient))}`
+          : ""
+      }`,
+    );
+    addText(`Gender: ${selectedPatient.gender || "Not recorded"}`);
+    addText(`Referred to: ${recipientName || "Receiving clinician"}`);
+    addText(
+      `Speciality / Facility: ${
+        [recipientSpeciality, recipientFacility].filter(Boolean).join(" / ") ||
+        "Not specified"
+      }`,
+    );
+    addText(`Urgency: ${urgency}`, { bold: true, gap: 5 });
+
+    const section = (heading: string, value: string) => {
+      addText(heading, { bold: true, heading: true });
+      addText(value || "Not recorded");
+    };
+
+    section("Reason for Referral", reason);
+    section("Clinical Summary / History", clinicalSummary);
+    section("Relevant Examination / Clinical Findings", examinationFindings);
+    section("Relevant Medical History", medicalHistory);
+    section("Current Medication", currentMedication);
+    section("Allergies", allergyText || "Not recorded");
+    section("Investigations / Results", investigations);
+    section(
+      "Working Diagnosis / ICD-10",
+      selectedIcd ? `${selectedIcd.code} - ${selectedIcd.description}` : "Not recorded",
+    );
+    section("Treatment / Management to Date", managementToDate);
+    section("Specific Referral Request", referralRequest);
+
+    if (additionalNotes.trim()) {
+      section("Additional Notes", additionalNotes);
+    }
+
+    const attachmentNames = [
+      ...uploadedAttachments.map((file) => file.file_name),
+      ...pendingFiles.map((file) => file.name),
+    ];
+
+    if (attachmentNames.length > 0) {
+      section("Attachments", attachmentNames.map((name) => `• ${name}`).join("\n"));
+    }
+
+    addText("Referring Clinician", { bold: true, heading: true });
+    addText(doctorName || "Referring clinician", { bold: true });
+    if (doctor?.qualifications) addText(doctor.qualifications);
+    addText(`HPCSA / Registration: ${doctorRegistration || "Not recorded"}`);
+    addText(`Practice No: ${doctor?.practice_number || "Not recorded"}`);
+    if (doctor?.email) addText(`Email: ${doctor.email}`);
+    if (doctor?.mobile || doctor?.phone) {
+      addText(`Mobile: ${doctor?.mobile || doctor?.phone}`);
+    }
+
+    return doc;
+  }
+
+  function pdfToBase64(doc: jsPDF) {
+    const bytes = new Uint8Array(doc.output("arraybuffer"));
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  async function downloadReferralPdf() {
+    const validationError = validateReferral();
+
+    if (validationError) {
+      setOperationMessage(validationError);
+      return;
+    }
+
+    setOperationMessage("Saving referral and preparing PDF...");
+
+    const saved = await saveReferral("issued");
+
+    if (!saved) {
+      setOperationMessage(
+        "The referral could not be saved, so the PDF was not created. Check the database error above.",
+      );
+      return;
+    }
+
+    try {
+      const doc = buildReferralPdf();
+      const fileName = `CareScriber-Referral-${referralNumber}.pdf`;
+      doc.save(fileName);
+      setOperationMessage(`PDF downloaded successfully: ${fileName}`);
+    } catch (error) {
+      console.error("PDF generation failed:", error);
+      setOperationMessage(
+        error instanceof Error ? `PDF generation failed: ${error.message}` : "PDF generation failed.",
+      );
+    }
+  }
+
+  async function issueAndPrint() {
+    const validationError = validateReferral();
+
+    if (validationError) {
+      setOperationMessage(validationError);
+      return;
+    }
+
+    const saved = await saveReferral("issued");
+
+    if (!saved) {
+      setOperationMessage("Referral could not be saved. Print was cancelled.");
+      return;
+    }
 
     const popup = window.open("", "_blank");
 
     if (!popup) {
-      setMessage(
-        "Referral saved, but the print window was blocked. Allow pop-ups and try again.",
+      setOperationMessage(
+        "Referral saved, but the print window was blocked. Use Download PDF instead.",
       );
       return;
     }
 
     popup.document.open();
-    popup.document.write(html);
+    popup.document.write(buildLetterHtml());
     popup.document.close();
     popup.focus();
 
     setTimeout(() => popup.print(), 350);
+    setOperationMessage("Referral saved. Browser print window opened.");
   }
 
   async function sendReferral() {
@@ -990,12 +1174,19 @@ export default function ReferralPage() {
 
     setSending(true);
     setMessage("");
+    setOperationMessage("Saving referral and preparing email...");
 
     try {
       const saved = await saveReferral("emailed");
       if (!saved) return;
 
       const attachmentsForEmail = saved.attachments || uploadedAttachments;
+
+      const pdf = buildReferralPdf();
+      const pdfBase64 = pdfToBase64(pdf);
+      const pdfFileName = `CareScriber-Referral-${referralNumber}.pdf`;
+
+      setOperationMessage("Referral saved. Sending email...");
 
       const response = await fetch("/api/send-referral", {
         method: "POST",
@@ -1007,6 +1198,8 @@ export default function ReferralPage() {
           referralNumber,
           subject: `Medical Referral - ${patientName(selectedPatient)} - ${referralNumber}`,
           html: buildLetterHtml(true),
+          pdfBase64,
+          pdfFileName,
           attachments: attachmentsForEmail.map((attachment) => ({
             fileName: attachment.file_name,
             signedUrl: attachment.signed_url,
@@ -1023,13 +1216,18 @@ export default function ReferralPage() {
       setMessage(
         `Referral ${referralNumber} sent successfully to ${recipientEmail.trim()}.`,
       );
+      setOperationMessage(
+        `Referral sent successfully to ${recipientEmail.trim()}. The PDF was attached to the email.`,
+      );
     } catch (error) {
       console.error("Referral email failed:", error);
-      setMessage(
+      const errorMessage =
         error instanceof Error
           ? `Referral email failed: ${error.message}`
-          : "Referral email failed.",
-      );
+          : "Referral email failed.";
+
+      setMessage(errorMessage);
+      setOperationMessage(errorMessage);
     } finally {
       setSending(false);
     }
@@ -1481,14 +1679,36 @@ export default function ReferralPage() {
           before issuing the referral.
         </div>
 
+        {operationMessage && (
+          <div style={styles.operationMessage}>
+            {operationMessage}
+          </div>
+        )}
+
         <div style={styles.actions}>
           <button
             type="button"
             style={styles.secondaryButton}
             disabled={saving || sending || uploadingAttachments}
-            onClick={() => void saveReferral("draft")}
+            onClick={async () => {
+              const saved = await saveReferral("draft");
+              setOperationMessage(
+                saved
+                  ? `Draft ${referralNumber} saved successfully.`
+                  : "Draft could not be saved. Check the error message above.",
+              );
+            }}
           >
             {saving || uploadingAttachments ? "Saving..." : "Save Draft"}
+          </button>
+
+          <button
+            type="button"
+            style={styles.pdfButton}
+            disabled={saving || sending || uploadingAttachments}
+            onClick={() => void downloadReferralPdf()}
+          >
+            ↓ Download PDF
           </button>
 
           <button
@@ -1497,7 +1717,7 @@ export default function ReferralPage() {
             disabled={saving || sending || uploadingAttachments}
             onClick={() => void issueAndPrint()}
           >
-            Issue + Print / PDF
+            Print Referral
           </button>
 
           <button
@@ -1801,6 +2021,16 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#78350f",
     fontSize: 15,
   },
+  operationMessage: {
+    marginTop: 18,
+    padding: 14,
+    borderRadius: 12,
+    background: "#eff6ff",
+    border: "1px solid #93c5fd",
+    color: "#1e3a8a",
+    fontWeight: 800,
+    lineHeight: 1.5,
+  },
   actions: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
@@ -1813,6 +2043,16 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px 16px",
     background: "#ffffff",
     color: "#111827",
+    fontWeight: 800,
+    fontSize: 16,
+    cursor: "pointer",
+  },
+  pdfButton: {
+    border: 0,
+    borderRadius: 12,
+    padding: "14px 16px",
+    background: "#7c3aed",
+    color: "#ffffff",
     fontWeight: 800,
     fontSize: 16,
     cursor: "pointer",
