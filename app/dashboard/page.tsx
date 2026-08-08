@@ -15,7 +15,6 @@ type DoctorProfile = {
   practice_number?: string | null;
 };
 
-
 type InboxReferral = {
   id: string;
   referral_code?: string | null;
@@ -43,9 +42,12 @@ export default function DashboardPage() {
   const [doctorName, setDoctorName] = useState("Doctor");
   const [profileSummary, setProfileSummary] = useState("");
   const [loading, setLoading] = useState(true);
+
   const [waitingReferralCount, setWaitingReferralCount] = useState(0);
+
   const [oldestWaitingReferral, setOldestWaitingReferral] =
     useState<InboxReferral | null>(null);
+
   const [inboxError, setInboxError] = useState("");
 
   async function loadInboxSummary() {
@@ -76,11 +78,19 @@ export default function DashboardPage() {
       );
 
       setWaitingReferralCount(waiting.length);
-      setOldestWaitingReferral(waiting[0] || null);
+
+      setOldestWaitingReferral(
+        waiting[0] || null,
+      );
     } catch (error: unknown) {
-      console.error("Could not load inbox summary:", error);
+      console.error(
+        "Could not load inbox summary:",
+        error,
+      );
+
       setWaitingReferralCount(0);
       setOldestWaitingReferral(null);
+
       setInboxError(
         error instanceof Error
           ? error.message
@@ -102,7 +112,8 @@ export default function DashboardPage() {
           return;
         }
 
-        let profile: DoctorProfile | null = null;
+        let profile: DoctorProfile | null =
+          null;
 
         const byId = await supabase
           .from("profiles")
@@ -119,7 +130,8 @@ export default function DashboardPage() {
           .maybeSingle();
 
         if (!byId.error && byId.data) {
-          profile = byId.data as DoctorProfile;
+          profile =
+            byId.data as DoctorProfile;
         }
 
         if (!profile) {
@@ -137,8 +149,12 @@ export default function DashboardPage() {
             .eq("user_id", user.id)
             .maybeSingle();
 
-          if (!byUserId.error && byUserId.data) {
-            profile = byUserId.data as DoctorProfile;
+          if (
+            !byUserId.error &&
+            byUserId.data
+          ) {
+            profile =
+              byUserId.data as DoctorProfile;
           }
         }
 
@@ -154,7 +170,12 @@ export default function DashboardPage() {
           user.user_metadata?.last_name ||
           "";
 
-        const fullName = [firstName, surname].filter(Boolean).join(" ");
+        const fullName = [
+          firstName,
+          surname,
+        ]
+          .filter(Boolean)
+          .join(" ");
 
         setDoctorName(fullName);
 
@@ -163,7 +184,8 @@ export default function DashboardPage() {
           profile?.hpcsa ||
           "";
 
-        const practiceNumber = profile?.practice_number || "";
+        const practiceNumber =
+          profile?.practice_number || "";
 
         const summaryParts = [
           registrationNumber
@@ -174,11 +196,16 @@ export default function DashboardPage() {
             : "",
         ].filter(Boolean);
 
-        setProfileSummary(summaryParts.join(" • "));
+        setProfileSummary(
+          summaryParts.join(" • "),
+        );
 
         await loadInboxSummary();
       } catch (error) {
-        console.error("Dashboard profile error:", error);
+        console.error(
+          "Dashboard profile error:",
+          error,
+        );
       } finally {
         setLoading(false);
       }
@@ -188,9 +215,12 @@ export default function DashboardPage() {
   }, [router]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadInboxSummary();
-    }, 30_000);
+    const timer = window.setInterval(
+      () => {
+        void loadInboxSummary();
+      },
+      30_000,
+    );
 
     return () => {
       window.clearInterval(timer);
@@ -199,7 +229,9 @@ export default function DashboardPage() {
 
   async function logout() {
     await supabase.auth.signOut();
+
     router.replace("/login");
+
     router.refresh();
   }
 
@@ -207,7 +239,9 @@ export default function DashboardPage() {
     return (
       <main style={styles.page}>
         <section style={styles.card}>
-          <p style={styles.loading}>Loading dashboard…</p>
+          <p style={styles.loading}>
+            Loading dashboard…
+          </p>
         </section>
       </main>
     );
@@ -216,26 +250,50 @@ export default function DashboardPage() {
   return (
     <main style={styles.page}>
       <section style={styles.card}>
-        <p style={styles.label}>CareScriber AI</p>
+        <p style={styles.label}>
+          CareScriber AI
+        </p>
 
-        <h1 style={styles.title}>Welcome, Dr {doctorName}</h1>
+        <h1 style={styles.title}>
+          Welcome, Dr {doctorName}
+        </h1>
 
         <p style={styles.subtitle}>
-          Secure clinical assistant for virtual consultations, SOAP notes,
-          patient summaries, prescriptions and clinical documents.
+          Secure clinical assistant for
+          virtual consultations, SOAP
+          notes, patient summaries,
+          prescriptions, referrals and
+          clinical documents.
         </p>
 
         {profileSummary && (
-          <div style={styles.profileSummary}>{profileSummary}</div>
+          <div
+            style={styles.profileSummary}
+          >
+            {profileSummary}
+          </div>
         )}
 
         <div style={styles.grid}>
-          <Link href="/inbox" style={styles.inboxCard}>
-            <div style={styles.inboxTopRow}>
-              <div style={styles.icon}>📥</div>
+          {/* VIRTUAL CONSULT INBOX */}
+          <Link
+            href="/inbox"
+            style={styles.inboxCard}
+          >
+            <div
+              style={styles.inboxTopRow}
+            >
+              <div style={styles.icon}>
+                📥
+              </div>
 
-              {waitingReferralCount > 0 && (
-                <div style={styles.inboxBadge}>
+              {waitingReferralCount >
+                0 && (
+                <div
+                  style={
+                    styles.inboxBadge
+                  }
+                >
                   {waitingReferralCount}
                 </div>
               )}
@@ -246,38 +304,70 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Review paid SymptomAI referrals, accept the oldest waiting
-              request and open the linked patient file.
+              Review paid SymptomAI
+              referrals, accept the
+              oldest waiting request and
+              open the linked patient
+              file.
             </p>
 
             {inboxError ? (
-              <div style={styles.inboxError}>
-                Inbox status unavailable: {inboxError}
+              <div
+                style={
+                  styles.inboxError
+                }
+              >
+                Inbox status
+                unavailable:{" "}
+                {inboxError}
               </div>
             ) : (
               <>
-                <div style={styles.inboxStatus}>
-                  {waitingReferralCount === 0
+                <div
+                  style={
+                    styles.inboxStatus
+                  }
+                >
+                  {waitingReferralCount ===
+                  0
                     ? "No paid referrals currently waiting"
                     : `${waitingReferralCount} paid ${
-                        waitingReferralCount === 1
+                        waitingReferralCount ===
+                        1
                           ? "referral"
                           : "referrals"
                       } waiting`}
                 </div>
 
                 {oldestWaitingReferral && (
-                  <div style={styles.oldestReferral}>
-                    <div style={styles.oldestReferralLabel}>
-                      Oldest waiting referral
+                  <div
+                    style={
+                      styles.oldestReferral
+                    }
+                  >
+                    <div
+                      style={
+                        styles.oldestReferralLabel
+                      }
+                    >
+                      Oldest waiting
+                      referral
                     </div>
 
-                    <div style={styles.oldestReferralCode}>
+                    <div
+                      style={
+                        styles.oldestReferralCode
+                      }
+                    >
                       {oldestWaitingReferral.referral_code ||
                         "Referral code unavailable"}
                     </div>
 
-                    <div style={styles.oldestReferralReason}>
+                    <div
+                      style={
+                        styles.oldestReferralReason
+                      }
+                    >
                       <b>Reason:</b>{" "}
                       {oldestWaitingReferral.consultation_reason ||
                         "No consultation reason recorded"}
@@ -288,109 +378,184 @@ export default function DashboardPage() {
             )}
           </Link>
 
+          {/* NEW CONSULTATION */}
           <Link
             href="/consultation"
             style={styles.primaryCard}
           >
-            <div style={styles.icon}>+</div>
+            <div style={styles.icon}>
+              +
+            </div>
 
             <h2 style={styles.cardTitle}>
               New Consultation
             </h2>
 
             <p style={styles.cardText}>
-              Start recording, generate a transcript and create a SOAP note.
+              Start recording, generate
+              a transcript and create a
+              SOAP note.
             </p>
           </Link>
 
+          {/* SEARCH PATIENT */}
           <Link
             href="/patients"
             style={styles.optionCard}
           >
-            <div style={styles.icon}>🔍</div>
+            <div style={styles.icon}>
+              🔍
+            </div>
 
             <h2 style={styles.cardTitle}>
               Search Patient
             </h2>
 
             <p style={styles.cardText}>
-              Find or register a patient before starting a consultation.
+              Find or register a patient
+              before starting a
+              consultation.
             </p>
           </Link>
 
+          {/* RECENT CONSULTATIONS */}
           <Link
             href="/consultation"
             style={styles.optionCard}
           >
-            <div style={styles.icon}>📝</div>
+            <div style={styles.icon}>
+              📝
+            </div>
 
             <h2 style={styles.cardTitle}>
               Recent Consultations
             </h2>
 
             <p style={styles.cardText}>
-              Continue with the latest consultation workflow.
+              Continue with the latest
+              consultation workflow.
             </p>
           </Link>
 
+          {/* E-SCRIPT */}
           <Link
             href="/e-script"
             style={styles.optionCard}
           >
-            <div style={styles.icon}>💊</div>
+            <div style={styles.icon}>
+              💊
+            </div>
 
             <h2 style={styles.cardTitle}>
               e-Script
             </h2>
 
             <p style={styles.cardText}>
-              Generate and send an electronic prescription.
+              Generate and send an
+              electronic prescription.
             </p>
           </Link>
 
+          {/* SICK NOTE */}
           <Link
             href="/sick-note"
             style={styles.optionCard}
           >
-            <div style={styles.icon}>📄</div>
+            <div style={styles.icon}>
+              📄
+            </div>
 
             <h2 style={styles.cardTitle}>
               Sick Note
             </h2>
 
             <p style={styles.cardText}>
-              Generate and email a medical certificate.
+              Generate and email a
+              medical certificate.
             </p>
           </Link>
 
+          {/* MEDICAL REFERRAL */}
+          <Link
+            href="/referral"
+            style={styles.referralCard}
+          >
+            <div style={styles.icon}>
+              🏥
+            </div>
+
+            <h2 style={styles.cardTitle}>
+              Medical Referral
+            </h2>
+
+            <p style={styles.cardText}>
+              Create a structured
+              medical referral with
+              patient details, clinical
+              information, ICD-10
+              diagnosis and referring
+              clinician details.
+            </p>
+          </Link>
+
+          {/* PROFILE */}
           <Link
             href="/profile"
             style={styles.profileCard}
           >
-            <div style={styles.icon}>👤</div>
+            <div style={styles.icon}>
+              👤
+            </div>
 
             <h2 style={styles.cardTitle}>
               My Profile
             </h2>
 
             <p style={styles.cardText}>
-              Update your email, mobile number, HPCSA or MP number, practice
-              number, qualifications and practice address.
+              Update your email, mobile
+              number, HPCSA or MP
+              number, practice number,
+              qualifications and
+              practice address.
             </p>
           </Link>
         </div>
 
         <div style={styles.workflow}>
-          <h3 style={styles.workflowTitle}>
+          <h3
+            style={styles.workflowTitle}
+          >
             Virtual Consult Workflow
           </h3>
 
-          <p>1. Open Virtual Consult Inbox</p>
-          <p>2. Accept the oldest paid referral</p>
-          <p>3. Open the linked patient file</p>
-          <p>4. Complete consultation and SOAP note</p>
-          <p>5. Generate e-Script or Sick Note</p>
-          <p>6. Mark referral completed</p>
+          <p>
+            1. Open Virtual Consult
+            Inbox
+          </p>
+
+          <p>
+            2. Accept the oldest paid
+            referral
+          </p>
+
+          <p>
+            3. Open the linked patient
+            file
+          </p>
+
+          <p>
+            4. Complete consultation and
+            SOAP note
+          </p>
+
+          <p>
+            5. Generate e-Script, Sick
+            Note or Medical Referral
+          </p>
+
+          <p>
+            6. Mark referral completed
+          </p>
         </div>
 
         <button
@@ -434,7 +599,8 @@ const styles: {
   },
 
   title: {
-    fontSize: "clamp(34px, 7vw, 44px)",
+    fontSize:
+      "clamp(34px, 7vw, 44px)",
     lineHeight: 1.15,
     color: "#0f172a",
     marginTop: 16,
@@ -477,7 +643,8 @@ const styles: {
 
   inboxTopRow: {
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent:
+      "space-between",
     alignItems: "flex-start",
   },
 
@@ -499,7 +666,8 @@ const styles: {
     marginTop: 16,
     padding: "10px 12px",
     borderRadius: 12,
-    background: "rgba(255, 255, 255, 0.16)",
+    background:
+      "rgba(255, 255, 255, 0.16)",
     fontSize: 15,
     fontWeight: 700,
   },
@@ -508,7 +676,8 @@ const styles: {
     marginTop: 16,
     padding: "10px 12px",
     borderRadius: 12,
-    background: "rgba(254, 226, 226, 0.95)",
+    background:
+      "rgba(254, 226, 226, 0.95)",
     color: "#991b1b",
     fontSize: 14,
     fontWeight: 700,
@@ -518,7 +687,8 @@ const styles: {
     marginTop: 12,
     padding: 14,
     borderRadius: 14,
-    background: "rgba(255, 255, 255, 0.13)",
+    background:
+      "rgba(255, 255, 255, 0.13)",
   },
 
   oldestReferralLabel: {
@@ -558,6 +728,18 @@ const styles: {
     borderRadius: 22,
     textDecoration: "none",
     border: "1px solid #cbd5e1",
+  },
+
+  referralCard: {
+    display: "block",
+    background: "#f5f3ff",
+    color: "#5b21b6",
+    padding: 24,
+    borderRadius: 22,
+    textDecoration: "none",
+    border: "2px solid #c4b5fd",
+    boxShadow:
+      "0 8px 20px rgba(91, 33, 182, 0.08)",
   },
 
   profileCard: {
