@@ -1188,29 +1188,70 @@ export default function ReferralPage() {
 
       setOperationMessage("Referral saved. Sending email...");
 
-      const response = await fetch("/api/send-referral", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: recipientEmail.trim(),
-          recipientName: recipientName.trim(),
-          patientName: patientName(selectedPatient),
-          referralNumber,
-          subject: `Medical Referral - ${patientName(selectedPatient)} - ${referralNumber}`,
-          html: buildLetterHtml(true),
-          pdfBase64,
-          pdfFileName,
-          attachments: attachmentsForEmail.map((attachment) => ({
-            fileName: attachment.file_name,
-            signedUrl: attachment.signed_url,
-          })),
-        }),
+      const sendReferralUrl =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/api/send-referral`
+          : "/api/send-referral";
+
+      const requestBody = {
+        to: recipientEmail.trim(),
+        recipientName: recipientName.trim(),
+        patientName: patientName(selectedPatient),
+        referralNumber,
+        subject: `Medical Referral - ${patientName(selectedPatient)} - ${referralNumber}`,
+        html: buildLetterHtml(true),
+        pdfBase64,
+        pdfFileName,
+        attachments: attachmentsForEmail.map((attachment) => ({
+          fileName: attachment.file_name,
+          signedUrl: attachment.signed_url,
+        })),
+      };
+
+      console.log("CareScriber referral email request:", {
+        url: sendReferralUrl,
+        recipient: requestBody.to,
+        referralNumber: requestBody.referralNumber,
+        attachmentCount: requestBody.attachments.length,
       });
 
-      const result = await response.json().catch(() => ({}));
+      const response = await fetch(sendReferralUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify(requestBody),
+      });
+
+      const rawResponse = await response.text();
+
+      let result: Record<string, any> = {};
+
+      try {
+        result = rawResponse ? JSON.parse(rawResponse) : {};
+      } catch {
+        result = {
+          error:
+            rawResponse ||
+            `CareScriber send-referral returned HTTP ${response.status}.`,
+        };
+      }
+
+      console.log("CareScriber referral email response:", {
+        url: response.url,
+        status: response.status,
+        ok: response.ok,
+        result,
+      });
 
       if (!response.ok) {
-        throw new Error(result.error || "Could not send referral email.");
+        throw new Error(
+          result.error ||
+            result.message ||
+            `Could not send referral email. HTTP ${response.status}.`,
+        );
       }
 
       setMessage(
@@ -2105,4 +2146,4 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     cursor: "pointer",
   },
-};
+}
