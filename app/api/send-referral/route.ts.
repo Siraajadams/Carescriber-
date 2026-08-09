@@ -44,24 +44,59 @@ async function fetchAttachmentAsBase64(url: string) {
   return Buffer.from(arrayBuffer).toString("base64");
 }
 
+/*
+  =====================================================
+  HEALTH CHECK
+  =====================================================
+
+  Open:
+  https://carescriber.com/api/send-referral
+
+  If this route is deployed correctly, it should return
+  status 200 and JSON instead of a Next.js 404.
+*/
+
+export async function GET() {
+  return NextResponse.json({
+    success: true,
+    route: "/api/send-referral",
+    status: "ready",
+    resendConfigured: Boolean(process.env.RESEND_API_KEY),
+    fromEmailConfigured: Boolean(
+      process.env.CARESCRIBER_FROM_EMAIL ||
+        process.env.RESEND_FROM_EMAIL ||
+        process.env.PRESCRIPTION_FROM_EMAIL,
+    ),
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const resendApiKey =
-      process.env.RESEND_API_KEY;
+    const resendApiKey = process.env.RESEND_API_KEY;
 
     if (!resendApiKey) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "RESEND_API_KEY is not configured in Vercel.",
+          error: "RESEND_API_KEY is not configured in Vercel.",
         },
         { status: 500 },
       );
     }
 
-    const body =
-      (await req.json()) as SendReferralBody;
+    let body: SendReferralBody;
+
+    try {
+      body = (await req.json()) as SendReferralBody;
+    } catch {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid JSON request body.",
+        },
+        { status: 400 },
+      );
+    }
 
     const to = (body.to || "").trim();
 
@@ -69,8 +104,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "Receiving clinician email address is required.",
+          error: "Receiving clinician email address is required.",
         },
         { status: 400 },
       );
@@ -80,8 +114,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "Receiving clinician email address is invalid.",
+          error: "Receiving clinician email address is invalid.",
         },
         { status: 400 },
       );
@@ -91,8 +124,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "Referral content is missing.",
+          error: "Referral content is missing.",
         },
         { status: 400 },
       );
@@ -102,9 +134,6 @@ export async function POST(req: NextRequest) {
       =====================================================
       BUILD EMAIL ATTACHMENTS
       =====================================================
-
-      1. Generated referral PDF
-      2. Clinical photos / documents from Supabase Storage
     */
 
     const emailAttachments: {
@@ -119,20 +148,17 @@ export async function POST(req: NextRequest) {
     */
 
     if (body.pdfBase64) {
-      const cleanPdfBase64 =
-        body.pdfBase64.replace(
-          /^data:application\/pdf;base64,/,
-          "",
-        );
+      const cleanPdfBase64 = body.pdfBase64.replace(
+        /^data:application\/pdf;base64,/,
+        "",
+      );
 
       emailAttachments.push({
         filename:
           body.pdfFileName ||
           `CareScriber-Referral-${
-            body.referralNumber ||
-            "Referral"
+            body.referralNumber || "Referral"
           }.pdf`,
-
         content: cleanPdfBase64,
       });
     }
@@ -141,42 +167,23 @@ export async function POST(req: NextRequest) {
       -----------------------------------------------------
       2. USER-UPLOADED CLINICAL ATTACHMENTS
       -----------------------------------------------------
-
-      Signed Supabase URLs are downloaded server-side
-      and converted to base64 for Resend.
     */
 
-    for (
-      const attachment of
-        body.attachments || []
-    ) {
-      if (
-        !attachment.fileName ||
-        !attachment.signedUrl
-      ) {
+    for (const attachment of body.attachments || []) {
+      if (!attachment.fileName || !attachment.signedUrl) {
         continue;
       }
 
       try {
-        const content =
-          await fetchAttachmentAsBase64(
-            attachment.signedUrl,
-          );
+        const content = await fetchAttachmentAsBase64(
+          attachment.signedUrl,
+        );
 
         emailAttachments.push({
-          filename:
-            attachment.fileName,
-
+          filename: attachment.fileName,
           content,
         });
       } catch (attachmentError) {
-        /*
-          Do not cancel the entire referral email
-          because one optional attachment failed.
-
-          The failure will be visible in Vercel logs.
-        */
-
         console.error(
           `Could not attach file: ${attachment.fileName}`,
           attachmentError,
@@ -188,29 +195,20 @@ export async function POST(req: NextRequest) {
       =====================================================
       FROM EMAIL
       =====================================================
-
-      The sender MUST be a domain/address
-      verified in Resend.
-
-      Recommended Vercel variable:
-
-      CARESCRIBER_FROM_EMAIL
-      CareScriber <referrals@carescriber.com>
     */
 
     const fromEmail =
-      process.env
-        .CARESCRIBER_FROM_EMAIL ||
+      process.env.CARESCRIBER_FROM_EMAIL ||
       process.env.RESEND_FROM_EMAIL ||
+      process.env.PRESCRIPTION_FROM_EMAIL ||
       "";
 
     if (!fromEmail) {
       return NextResponse.json(
         {
           success: false,
-
           error:
-            "CARESCRIBER_FROM_EMAIL or RESEND_FROM_EMAIL is not configured in Vercel.",
+            "CARESCRIBER_FROM_EMAIL, RESEND_FROM_EMAIL or PRESCRIPTION_FROM_EMAIL is not configured in Vercel.",
         },
         { status: 500 },
       );
@@ -222,13 +220,10 @@ export async function POST(req: NextRequest) {
       =====================================================
     */
 
-    const patientName =
-      body.patientName?.trim() ||
-      "Patient";
+    const patientName = body.patientName?.trim() || "Patient";
 
     const referralNumber =
-      body.referralNumber?.trim() ||
-      "Medical Referral";
+      body.referralNumber?.trim() || "Medical Referral";
 
     const subject =
       body.subject?.trim() ||
@@ -240,128 +235,88 @@ export async function POST(req: NextRequest) {
       =====================================================
     */
 
-    const resendResponse =
-      await fetch(
-        "https://api.resend.com/emails",
-        {
-          method: "POST",
-
-          headers: {
-            Authorization:
-              `Bearer ${resendApiKey}`,
-
-            "Content-Type":
-              "application/json",
-          },
-
-          body: JSON.stringify({
-            from: fromEmail,
-
-            to: [to],
-
-            subject,
-
-            html: body.html,
-
-            attachments:
-              emailAttachments.length >
-              0
-                ? emailAttachments
-                : undefined,
-          }),
+    const resendResponse = await fetch(
+      "https://api.resend.com/emails",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [to],
+          subject,
+          html: body.html,
+          attachments:
+            emailAttachments.length > 0
+              ? emailAttachments
+              : undefined,
+        }),
+      },
+    );
 
-    /*
-      =====================================================
-      READ RESEND RESPONSE
-      =====================================================
-    */
+    const rawResendResponse = await resendResponse.text();
 
-    const resendData =
-      await resendResponse
-        .json()
-        .catch(() => ({}));
+    let resendData: Record<string, any> = {};
+
+    try {
+      resendData = rawResendResponse
+        ? JSON.parse(rawResendResponse)
+        : {};
+    } catch {
+      resendData = {
+        message: rawResendResponse,
+      };
+    }
 
     if (!resendResponse.ok) {
-      console.error(
-        "Resend referral email error:",
-        resendData,
-      );
+      console.error("Resend referral email error:", {
+        status: resendResponse.status,
+        response: resendData,
+      });
 
       return NextResponse.json(
         {
           success: false,
-
           error:
             resendData?.message ||
             resendData?.error ||
-            "Resend rejected the referral email.",
-
+            `Resend rejected the referral email. HTTP ${resendResponse.status}.`,
           details: resendData,
         },
         {
           status:
-            resendResponse.status ||
-            500,
+            resendResponse.status >= 400
+              ? resendResponse.status
+              : 500,
         },
       );
     }
 
-    /*
-      =====================================================
-      SUCCESS LOG
-      =====================================================
-    */
-
-    console.log(
-      "Referral email sent successfully",
-      {
-        referralNumber,
-        patientName,
-        recipient: to,
-        resendId:
-          resendData?.id || null,
-        attachmentsSent:
-          emailAttachments.length,
-      },
-    );
-
-    /*
-      =====================================================
-      RETURN SUCCESS TO REFERRAL PAGE
-      =====================================================
-    */
+    console.log("Referral email sent successfully", {
+      referralNumber,
+      patientName,
+      recipient: to,
+      resendId: resendData?.id || null,
+      attachmentsSent: emailAttachments.length,
+    });
 
     return NextResponse.json({
       success: true,
-
-      message:
-        "Referral sent successfully.",
-
-      emailId:
-        resendData?.id || null,
-
+      message: "Referral sent successfully.",
+      emailId: resendData?.id || null,
       referralNumber,
-
       recipient: to,
-
-      attachmentsSent:
-        emailAttachments.length,
-
-      pdfAttached:
-        Boolean(body.pdfBase64),
+      attachmentsSent: emailAttachments.length,
+      pdfAttached: Boolean(body.pdfBase64),
     });
   } catch (error) {
-    console.error(
-      "Send referral API error:",
-      error,
-    );
+    console.error("Send referral API error:", error);
 
     return NextResponse.json(
       {
         success: false,
-
         error:
           error instanceof Error
             ? error.message
