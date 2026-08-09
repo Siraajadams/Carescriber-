@@ -29,7 +29,7 @@ function cleanBase64(value: string) {
 }
 
 function safeFileName(value: string) {
-  return value.replace(/[^\\w.\\-() ]+/g, "_").slice(0, 180);
+  return value.replace(/[^a-zA-Z0-9._() -]+/g, "_").slice(0, 180);
 }
 
 async function fetchAttachmentAsBase64(url: string) {
