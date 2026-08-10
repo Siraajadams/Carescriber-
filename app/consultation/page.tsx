@@ -76,6 +76,26 @@ function patientMobile(patient: Patient) {
   return patient.mobile || patient.phone || "";
 }
 
+function whatsappNumber(value: string) {
+  const digits = value.replace(/\D/g, "");
+
+  // South African local mobile/landline format: 0XXXXXXXXX -> 27XXXXXXXXX
+  if (digits.startsWith("0") && digits.length >= 10) {
+    return `27${digits.slice(1)}`;
+  }
+
+  // Already includes South Africa country code.
+  if (digits.startsWith("27")) {
+    return digits;
+  }
+
+  return digits;
+}
+
+function displayMobile(value: string) {
+  return value.trim() || "No mobile number captured";
+}
+
 function calculateAge(dob?: string | null, fallback?: number | null) {
   if (fallback) return String(fallback);
   if (!dob) return "Not captured";
@@ -394,6 +414,72 @@ export default function ConsultationPage() {
     } finally {
       setReferralLoading(false);
     }
+  }
+
+
+  function openWhatsAppCall() {
+    if (!selectedPatient) {
+      setMessage("Please select a patient first.");
+      return;
+    }
+
+    const mobile = patientMobile(selectedPatient);
+    const number = whatsappNumber(mobile);
+
+    if (!number) {
+      setMessage("No mobile number is captured for this patient.");
+      return;
+    }
+
+    setMessage(
+      "WhatsApp opened for the selected patient. Tap the phone icon in WhatsApp to start the voice call."
+    );
+
+    window.open(
+      `https://wa.me/${encodeURIComponent(number)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }
+
+  function openWhatsAppMessage() {
+    if (!selectedPatient) {
+      setMessage("Please select a patient first.");
+      return;
+    }
+
+    const mobile = patientMobile(selectedPatient);
+    const number = whatsappNumber(mobile);
+
+    if (!number) {
+      setMessage("No mobile number is captured for this patient.");
+      return;
+    }
+
+    const patientName = selectedPatient.first_name || "there";
+    const body = `Hi ${patientName}, this is your doctor contacting you from CareScriber regarding your consultation.`;
+
+    window.open(
+      `https://wa.me/${encodeURIComponent(number)}?text=${encodeURIComponent(body)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }
+
+  function callPatientNormally() {
+    if (!selectedPatient) {
+      setMessage("Please select a patient first.");
+      return;
+    }
+
+    const mobile = patientMobile(selectedPatient).replace(/\s+/g, "");
+
+    if (!mobile) {
+      setMessage("No mobile number is captured for this patient.");
+      return;
+    }
+
+    window.location.href = `tel:${mobile}`;
   }
 
   function newConsultation() {
@@ -811,6 +897,61 @@ REFERRAL / PRESCRIPTION
           </div>
         )}
 
+
+        {selectedPatient && (
+          <div style={styles.contactCard}>
+            <div style={styles.contactHeader}>
+              <div>
+                <p style={styles.contactKicker}>Patient Contact</p>
+                <h3 style={styles.contactTitle}>
+                  {selectedPatient.first_name} {patientSurname(selectedPatient)}
+                </h3>
+                <p style={styles.contactNumber}>
+                  {displayMobile(patientMobile(selectedPatient))}
+                </p>
+              </div>
+
+              <div style={styles.contactStatus}>
+                <span style={styles.contactDot} />
+                Ready to contact
+              </div>
+            </div>
+
+            <div style={styles.contactGrid}>
+              <button
+                type="button"
+                style={styles.whatsappCallButton}
+                onClick={openWhatsAppCall}
+              >
+                📞 WhatsApp Call Patient
+              </button>
+
+              <button
+                type="button"
+                style={styles.whatsappMessageButton}
+                onClick={openWhatsAppMessage}
+              >
+                💬 WhatsApp Message
+              </button>
+
+              <button
+                type="button"
+                style={styles.normalCallButton}
+                onClick={callPatientNormally}
+              >
+                ☎ Normal Phone Call
+              </button>
+            </div>
+
+            <p style={styles.contactHelp}>
+              WhatsApp opens the patient conversation. Tap the phone icon inside
+              WhatsApp to start the voice call. The doctor’s personal number is
+              only avoided when CareScriber is connected to a WhatsApp Business
+              calling service.
+            </p>
+          </div>
+        )}
+
         {selectedPatient && (
           <div style={styles.actionGrid}>
             <Link
@@ -955,6 +1096,18 @@ const styles: Record<string, CSSProperties> = {
   patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, marginTop: 12, display: "grid", gap: 6, fontSize: 18 },
   selected: { marginTop: 16, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
   actionGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 },
+  contactCard: { marginTop: 18, padding: 18, borderRadius: 20, background: "#f0fdf4", border: "1px solid #bbf7d0" },
+  contactHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" },
+  contactKicker: { margin: 0, color: "#15803d", fontWeight: 900, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.7 },
+  contactTitle: { margin: "6px 0 4px", fontSize: 24, fontWeight: 900, color: "#14532d" },
+  contactNumber: { margin: 0, fontSize: 18, fontWeight: 800, color: "#166534" },
+  contactStatus: { display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 999, background: "#dcfce7", color: "#166534", fontWeight: 900, fontSize: 13 },
+  contactDot: { width: 9, height: 9, borderRadius: 999, background: "#22c55e", display: "inline-block" },
+  contactGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 16 },
+  whatsappCallButton: { border: 0, borderRadius: 16, padding: 17, background: "#22c55e", color: "#052e16", fontWeight: 900, fontSize: 16, cursor: "pointer" },
+  whatsappMessageButton: { border: 0, borderRadius: 16, padding: 17, background: "#dcfce7", color: "#166534", fontWeight: 900, fontSize: 16, cursor: "pointer" },
+  normalCallButton: { border: 0, borderRadius: 16, padding: 17, background: "#0f172a", color: "#ffffff", fontWeight: 900, fontSize: 16, cursor: "pointer" },
+  contactHelp: { margin: "14px 0 0", color: "#475569", fontSize: 14, lineHeight: 1.5 },
   sickNoteButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
   escriptButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
   referralButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#7c3aed", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
