@@ -169,6 +169,25 @@ function normaliseId(value: string) {
   return value.trim().replace(/\s+/g, "").toUpperCase();
 }
 
+function normaliseEmail(value: string) {
+  const trimmed = value.trim();
+
+  // Allows a pasted value such as:
+  // Dr Smith <doctor@example.com>
+  const angleBracketMatch = trimmed.match(/<([^<>]+)>/);
+  const candidate = angleBracketMatch?.[1] || trimmed;
+
+  return candidate
+    .replace(/^mailto:/i, "")
+    .trim()
+    .toLowerCase();
+}
+
+function isValidEmail(value: string) {
+  const email = normaliseEmail(value);
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email);
+}
+
 export default function ReferralPage() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -705,6 +724,9 @@ export default function ReferralPage() {
     if (requireEmail && !recipientEmail.trim()) {
       return "Please enter the receiving clinician's email address before sending.";
     }
+    if (requireEmail && !isValidEmail(recipientEmail)) {
+      return "Please enter a valid receiving clinician email address, for example doctor@example.com.";
+    }
     return "";
   }
 
@@ -750,7 +772,7 @@ export default function ReferralPage() {
         recipient_name: recipientName.trim() || null,
         recipient_speciality: recipientSpeciality.trim() || null,
         recipient_facility: recipientFacility.trim() || null,
-        recipient_email: recipientEmail.trim() || null,
+        recipient_email: normaliseEmail(recipientEmail) || null,
         recipient_phone: recipientPhone.trim() || null,
 
         urgency,
@@ -1194,7 +1216,7 @@ export default function ReferralPage() {
           : "/api/referral-email";
 
       const requestBody = {
-        to: recipientEmail.trim(),
+        to: normaliseEmail(recipientEmail),
         recipientName: recipientName.trim(),
         patientName: patientName(selectedPatient),
         referralNumber,
@@ -1255,10 +1277,10 @@ export default function ReferralPage() {
       }
 
       setMessage(
-        `Referral ${referralNumber} sent successfully to ${recipientEmail.trim()}.`,
+        `Referral ${referralNumber} sent successfully to ${normaliseEmail(recipientEmail)}.`,
       );
       setOperationMessage(
-        `Referral sent successfully to ${recipientEmail.trim()}. The PDF was attached to the email.`,
+        `Referral sent successfully to ${normaliseEmail(recipientEmail)}. The PDF was attached to the email.`,
       );
     } catch (error) {
       console.error("Referral email failed:", error);
@@ -1426,13 +1448,33 @@ export default function ReferralPage() {
             placeholder="Practice / facility"
           />
 
-          <input
-            type="email"
-            style={styles.input}
-            value={recipientEmail}
-            onChange={(event) => setRecipientEmail(event.target.value)}
-            placeholder="Receiving clinician email"
-          />
+          <div>
+            <input
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              style={{
+                ...styles.input,
+                borderColor:
+                  recipientEmail.trim() && !isValidEmail(recipientEmail)
+                    ? "#dc2626"
+                    : "#d1d5db",
+              }}
+              value={recipientEmail}
+              onChange={(event) => setRecipientEmail(event.target.value)}
+              onBlur={() => {
+                if (recipientEmail.trim()) {
+                  setRecipientEmail(normaliseEmail(recipientEmail));
+                }
+              }}
+              placeholder="Receiving clinician email"
+            />
+            {recipientEmail.trim() && !isValidEmail(recipientEmail) && (
+              <div style={styles.emailError}>
+                Enter a valid email address, for example doctor@example.com.
+              </div>
+            )}
+          </div>
 
           <input
             style={styles.input}
@@ -1942,6 +1984,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     marginTop: 0,
     lineHeight: 1.5,
+  },
+  emailError: {
+    marginTop: 6,
+    color: "#b91c1c",
+    fontSize: 13,
+    fontWeight: 700,
   },
   allergyGrid: {
     display: "grid",
