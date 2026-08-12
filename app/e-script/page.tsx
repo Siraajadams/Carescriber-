@@ -1,12 +1,11 @@
-"use client";
+from pathlib import Path
+import re
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import Link from "next/link";
-import jsPDF from "jspdf";
-import { supabase } from "../../lib/supabase";
-import medicineData from "../../medicine.json";
+src = Path("/mnt/data/Pasted text(20260812-194449).txt")
+code = src.read_text()
 
-type Patient = {
+# 1) Expand Patient type with weight and address fields.
+old_patient = """type Patient = {
   id: string;
   first_name?: string;
   surname?: string;
@@ -22,867 +21,352 @@ type Patient = {
   medical_aid?: string | null;
   medical_aid_number?: string | null;
   allergies?: string | null;
-};
+};"""
 
-type Medicine = {
-  nappi: string;
-  schedule: string;
-  brand: string;
-  active: string;
-  strength: string;
-  unit: string;
-  form: string;
-  pack_size: string;
-  quantity: string;
-  sep: number | null;
-  unit_price: number | null;
-  manufacturer: string;
-  registration: string;
-  atc: string;
-  generic_originator: string;
-};
-
-type ICD10Code = {
-  id: number;
-  code: string;
-  description: string;
-  category: string | null;
-};
-
-type ScriptItem = {
+new_patient = """type Patient = {
   id: string;
-  icdCode: string;
-  icdDescription: string;
-  medicineQuery: string;
-  medicine?: Medicine;
-  dosage: string;
-  form: string;
-  frequency: string;
-  timing: string;
-  duration: string;
-  repeats: string;
-  substitution: string;
-  notes: string;
-};
+  first_name?: string;
+  surname?: string;
+  last_name?: string;
+  id_number?: string;
+  patient_id?: string;
+  date_of_birth?: string | null;
+  dob?: string | null;
+  age?: number | null;
+  gender?: string | null;
+  mobile?: string | null;
+  email?: string | null;
+  medical_aid?: string | null;
+  medical_aid_number?: string | null;
+  allergies?: string | null;
 
-type DoctorProfile = {
-  id: string;
-  first_name: string | null;
-  last_name: string | null;
-  surname: string | null;
-  email: string | null;
-  mobile: string | null;
-  registration_number: string | null;
-  practice_number: string | null;
-  practice_address: string | null;
-  country: string | null;
-};
+  // Weight fields - supports the common field names already used across CareScriber.
+  current_weight?: number | string | null;
+  weight_kg?: number | string | null;
+  weight?: number | string | null;
+  weight_updated_at?: string | null;
+  weight_recorded_at?: string | null;
+  weight_date?: string | null;
 
+  // Address fields - supports both a single stored address and split address fields.
+  physical_address?: string | null;
+  address?: string | null;
+  postal_address?: string | null;
+  address_line_1?: string | null;
+  address_line_2?: string | null;
+  suburb?: string | null;
+  city?: string | null;
+  province?: string | null;
+  postal_code?: string | null;
+};"""
 
+if old_patient not in code:
+    raise RuntimeError("Patient type block not found")
+code = code.replace(old_patient, new_patient)
 
-const forms = ["Cap", "Crm", "Oint", "Pess", "Pump", "Spray", "Supp", "Tab", "Unit(s)", "Vial", "Syrup", "Not Applicable"];
-const frequencies = ["OD", "BD", "TDS", "QID", "Before meals", "After meals", "Morning", "Lunch time", "Evening", "Use as directed", "Use as required"];
-const days = Array.from({ length: 29 }, (_, i) => String(i));
-const repeats = ["0", "1", "2", "3", "4", "5", "6"];
-
-function newItem(): ScriptItem {
-  return {
-    id: crypto.randomUUID(),
-    icdCode: "",
-    icdDescription: "",
-    medicineQuery: "",
-    dosage: "1",
-    form: "Tab",
-    frequency: "BD",
-    timing: "After meals",
-    duration: "5",
-    repeats: "0",
-    substitution: "Substitution allowed",
-    notes: "",
-  };
+# 2) Add formatting / patient detail helpers after today().
+old_today = """function today() {
+  return new Date().toISOString().slice(0, 10);
 }
+"""
 
-function clean(value?: string | null) {
-  return value || "";
-}
-
-function splitDoctorName(value: string) {
-  const withoutTitle = value.replace(/^\s*dr\.?\s+/i, "").trim();
-  const parts = withoutTitle.split(/\s+/).filter(Boolean);
-
-  return {
-    firstName: parts[0] || "",
-    lastName: parts.slice(1).join(" "),
-  };
-}
-
-function calcAge(dob?: string | null, fallback?: number | null) {
-  if (fallback) return fallback;
-  if (!dob) return "";
-  const d = new Date(dob);
-  if (Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  let age = now.getFullYear() - d.getFullYear();
-  const m = now.getMonth() - d.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
-  return age;
-}
-
-function today() {
+new_today = """function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function normaliseText(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function formatDate(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return new Intl.DateTimeFormat("en-ZA", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
 }
 
-function medicineScore(m: Medicine, query: string) {
-  const q = normaliseText(query);
-  if (!q) return 0;
-
-  const brand = normaliseText(m.brand || "");
-  const active = normaliseText(m.active || "");
-  const combined = normaliseText([
-    m.brand,
-    m.active,
-    m.strength,
-    m.unit,
-    m.form,
-    m.nappi,
-    m.schedule,
-    m.manufacturer,
-  ].join(" "));
-
-  if (brand.startsWith(q)) return 100;
-  if (active.startsWith(q)) return 90;
-  if (brand.includes(q)) return 80;
-  if (active.includes(q)) return 70;
-  if (combined.includes(q)) return 60;
-
-  const tokens = q.split(" ").filter(Boolean);
-  const matchedTokens = tokens.filter((t) => combined.includes(t)).length;
-  if (matchedTokens > 0) return 40 + matchedTokens;
-
-  return 0;
+function formatDateTime(value = new Date()) {
+  return new Intl.DateTimeFormat("en-ZA", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(value);
 }
 
-function normaliseMedicine(raw: any): Medicine {
-  return {
-    nappi: String(raw.nappi || raw.NAPPI || raw["NAPPI Code"] || raw.code || ""),
-    schedule: String(raw.schedule || raw.Schedule || raw.scheduling || ""),
-    brand: String(raw.brand || raw.Brand || raw.product || raw.Product || raw["Product Name"] || raw.name || ""),
-    active: String(raw.active || raw.Active || raw.ingredient || raw["Active Ingredient"] || raw.generic || ""),
-    strength: String(raw.strength || raw.Strength || ""),
-    unit: String(raw.unit || raw.Unit || ""),
-    form: String(raw.form || raw.Form || raw.dosage_form || raw["Dosage Form"] || ""),
-    pack_size: String(raw.pack_size || raw.Pack_Size || raw["Pack Size"] || ""),
-    quantity: String(raw.quantity || raw.Quantity || ""),
-    sep: raw.sep ?? raw.SEP ?? raw.price ?? null,
-    unit_price: raw.unit_price ?? raw["Unit Price"] ?? null,
-    manufacturer: String(raw.manufacturer || raw.Manufacturer || ""),
-    registration: String(raw.registration || raw.Registration || ""),
-    atc: String(raw.atc || raw.ATC || ""),
-    generic_originator: String(raw.generic_originator || raw["Generic/Originator"] || ""),
-  };
+function getPatientWeight(patient?: Patient | null) {
+  if (!patient) return "";
+
+  const raw =
+    patient.current_weight ??
+    patient.weight_kg ??
+    patient.weight ??
+    "";
+
+  if (raw === "" || raw === null || raw === undefined) return "";
+
+  const value = String(raw).trim();
+  if (!value) return "";
+
+  return /kg$/i.test(value) ? value : `${value} kg`;
 }
 
+function getPatientWeightDate(patient?: Patient | null) {
+  if (!patient) return "";
 
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return formatDate(
+    patient.weight_updated_at ||
+      patient.weight_recorded_at ||
+      patient.weight_date ||
+      ""
+  );
 }
 
-function blobToBase64(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
+function getPatientAddress(patient?: Patient | null) {
+  if (!patient) return "";
 
-    reader.onloadend = () => {
-      const result = String(reader.result || "");
-      resolve(result.includes(",") ? result.split(",")[1] : result);
-    };
+  const direct =
+    patient.physical_address ||
+    patient.address ||
+    patient.postal_address;
 
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
+  if (direct?.trim()) return direct.trim();
+
+  return [
+    patient.address_line_1,
+    patient.address_line_2,
+    patient.suburb,
+    patient.city,
+    patient.province,
+    patient.postal_code,
+  ]
+    .map((part) => (part || "").trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
-export default function EScriptPage() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const icdSearchTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const [linkedPatientId, setLinkedPatientId] = useState<string | null>(null);
-  const [pageInitialised, setPageInitialised] = useState(false);
-  const [drawing, setDrawing] = useState(false);
-  const [patientLoading, setPatientLoading] = useState(false);
-
-  const [patients, setPatients] = useState<Patient[]>([]);
-  const [medicines, setMedicines] = useState<Medicine[]>([]);
-  const [loadingMeds, setLoadingMeds] = useState(true);
-
-  const [patientSearch, setPatientSearch] = useState("");
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-
-  const [doctorName, setDoctorName] = useState("Dr");
-  const [doctorEmail, setDoctorEmail] = useState("");
-  const [doctorMobile, setDoctorMobile] = useState("");
-  const [hpcsa, setHpcsa] = useState("");
-  const [practiceNumber, setPracticeNumber] = useState("");
-  const [practiceAddress, setPracticeAddress] = useState("");
-  const [editDoctor, setEditDoctor] = useState(false);
-  const [doctorLoading, setDoctorLoading] = useState(true);
-  const [doctorSaving, setDoctorSaving] = useState(false);
-  const [doctorProfile, setDoctorProfile] = useState<DoctorProfile | null>(null);
-
-  const [items, setItems] = useState<ScriptItem[]>([newItem()]);
-  const [message, setMessage] = useState("");
-  const [scriptNumber, setScriptNumber] = useState(`RX-${Date.now()}`);
-  const [history, setHistory] = useState<any[]>([]);
-  const [emailing, setEmailing] = useState(false);
-  const [savingPrescription, setSavingPrescription] = useState(false);
-  const [recipientEmail, setRecipientEmail] = useState("");
-  const [icdSearchResults, setIcdSearchResults] = useState<Record<string, ICD10Code[]>>({});
-  const [icdSearchLoading, setIcdSearchLoading] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const params = new URLSearchParams(window.location.search);
-    const patientIdFromUrl = params.get("patientId");
-
-    setLinkedPatientId(patientIdFromUrl);
-    setPageInitialised(true);
-  }, []);
-
-  useEffect(() => {
-    if (!pageInitialised) return;
-
-    void initialisePage();
-
-    try {
-      const raw = Array.isArray(medicineData) ? medicineData : [];
-      setMedicines(
-        raw
-          .map(normaliseMedicine)
-          .filter((m) => m.brand || m.active || m.nappi)
-      );
-    } catch {
-      setMessage(
-        "Medicine file could not be loaded. Confirm medicine.json exists in the project root."
-      );
-    } finally {
-      setLoadingMeds(false);
-    }
-  }, [pageInitialised, linkedPatientId]);
-
-  async function initialisePage() {
-    await Promise.all([loadPatients(), loadDoctor(), loadHistory()]);
-
-    let patientId = linkedPatientId;
-
-    if (!patientId && typeof window !== "undefined") {
-      patientId = window.sessionStorage.getItem(
-        "carescriber_selected_patient_id"
-      );
-    }
-
-    if (patientId) {
-      await loadLinkedPatient(patientId);
-    }
-  }
-
-
-
-  async function loadPatients() {
-    const { data, error } = await supabase.from("patients").select("*").order("created_at", { ascending: false });
-    if (error) {
-      setMessage("Patient load error: " + error.message);
-      return;
-    }
-    setPatients((data || []) as Patient[]);
-  }
-
-  async function loadLinkedPatient(patientId: string) {
-    setPatientLoading(true);
-    setMessage("");
-
-    try {
-      const { data, error } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", patientId)
-        .maybeSingle();
-
-      if (error) {
-        console.error("Linked patient load error:", error);
-        setMessage(
-          "The selected patient could not be loaded: " + error.message
-        );
-        return;
-      }
-
-      if (!data) {
-        setMessage(
-          "The selected patient was not found. Please search for the patient again."
-        );
-        return;
-      }
-
-      const patient = data as Patient;
-      setSelectedPatient(patient);
-      setPatientSearch(
-        `${patient.first_name || ""} ${
-          patient.surname || patient.last_name || ""
-        }`.trim()
-      );
-      setRecipientEmail(patient.email || "");
-
-      if (typeof window !== "undefined") {
-        window.sessionStorage.setItem(
-          "carescriber_selected_patient_id",
-          patient.id
-        );
-      }
-    } catch (error) {
-      console.error("Unexpected linked patient load error:", error);
-      setMessage(
-        error instanceof Error
-          ? "The selected patient could not be loaded: " + error.message
-          : "An unexpected error occurred while loading the selected patient."
-      );
-    } finally {
-      setPatientLoading(false);
-    }
-  }
-
-  async function loadDoctor() {
-    setDoctorLoading(true);
-
-    try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) {
-        setMessage("Doctor login error: " + userError.message);
-        setEditDoctor(true);
-        return;
-      }
-
-      if (!user) {
-        setMessage("No logged-in doctor was found. Please log in again.");
-        setEditDoctor(true);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .select(
-          "id, first_name, last_name, surname, email, mobile, registration_number, practice_number, practice_address, country"
-        )
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (error) {
-        console.error("Doctor profile retrieval failed:", error);
-        setDoctorEmail(user.email || "");
-        setMessage("Doctor profile load error: " + error.message);
-        setEditDoctor(true);
-        return;
-      }
-
-      const profile = data as DoctorProfile | null;
-
-      if (!profile) {
-        setDoctorEmail(user.email || "");
-        setMessage(
-          "No doctor profile is linked to this login. Complete the fields below and press Save Doctor Details."
-        );
-        setEditDoctor(true);
-        return;
-      }
-
-      setDoctorProfile(profile);
-
-      const surnameValue = profile.last_name || profile.surname || "";
-      const fullName = `${profile.first_name || ""} ${surnameValue}`.trim();
-
-      setDoctorName(
-        fullName
-          ? /^dr\.?\s/i.test(fullName)
-            ? fullName
-            : `Dr ${fullName}`
-          : "Dr"
-      );
-      setDoctorEmail(profile.email || user.email || "");
-      setDoctorMobile(profile.mobile || "");
-      setHpcsa(profile.registration_number || "");
-      setPracticeNumber(profile.practice_number || "");
-      setPracticeAddress(profile.practice_address || "");
-
-      const profileComplete = Boolean(
-        fullName &&
-          profile.registration_number &&
-          profile.practice_number &&
-          profile.mobile &&
-          (profile.email || user.email)
-      );
-
-      setEditDoctor(!profileComplete);
-    } catch (error) {
-      console.error("Unexpected doctor profile error:", error);
-      setMessage(
-        error instanceof Error
-          ? "Doctor profile load error: " + error.message
-          : "An unexpected doctor profile error occurred."
-      );
-      setEditDoctor(true);
-    } finally {
-      setDoctorLoading(false);
-    }
-  }
-
-  async function saveDoctorProfile() {
-    if (doctorSaving) return;
-
-    setDoctorSaving(true);
-    setMessage("");
-
-    try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) {
-        setMessage("Doctor login error: " + userError.message);
-        return;
-      }
-
-      if (!user) {
-        setMessage("No logged-in doctor was found. Please log in again.");
-        return;
-      }
-
-      const parsedName = splitDoctorName(doctorName);
-
-      if (!parsedName.firstName || !parsedName.lastName) {
-        setMessage("Please enter the doctor's full first name and surname.");
-        return;
-      }
-
-      if (!hpcsa.trim()) {
-        setMessage("Please enter the HPCSA / council registration number.");
-        return;
-      }
-
-      const profilePayload = {
-        id: user.id,
-        role: "doctor",
-        first_name: parsedName.firstName,
-        last_name: parsedName.lastName,
-        surname: parsedName.lastName,
-        email: doctorEmail.trim().toLowerCase() || user.email || null,
-        mobile: doctorMobile.trim() || null,
-        registration_number: hpcsa.trim(),
-        practice_number: practiceNumber.trim() || null,
-        practice_address: practiceAddress.trim() || null,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { data, error } = await supabase
-        .from("profiles")
-        .upsert(profilePayload, { onConflict: "id" })
-        .select(
-          "id, first_name, last_name, surname, email, mobile, registration_number, practice_number, practice_address, country"
-        )
-        .single();
-
-      if (error) {
-        console.error("Doctor profile save failed:", error);
-        setMessage("Doctor profile save failed: " + error.message);
-        return;
-      }
-
-      setDoctorProfile(data as DoctorProfile);
-      setDoctorName(`Dr ${parsedName.firstName} ${parsedName.lastName}`.trim());
-      setDoctorEmail(profilePayload.email || "");
-      setDoctorMobile(profilePayload.mobile || "");
-      setHpcsa(profilePayload.registration_number);
-      setPracticeNumber(profilePayload.practice_number || "");
-      setPracticeAddress(profilePayload.practice_address || "");
-      setEditDoctor(false);
-      setMessage("Doctor details saved and will be loaded automatically on future scripts.");
-    } catch (error) {
-      console.error("Unexpected doctor profile save error:", error);
-      setMessage(
-        error instanceof Error
-          ? "Doctor profile save failed: " + error.message
-          : "An unexpected error occurred while saving the doctor profile."
-      );
-    } finally {
-      setDoctorSaving(false);
-    }
-  }
-
-  async function loadHistory() {
-    const { data } = await supabase.from("prescriptions").select("*").order("created_at", { ascending: false }).limit(10);
-    setHistory(data || []);
-  }
-
-  const filteredPatients = useMemo(() => {
-    const q = patientSearch.trim().toLowerCase();
-    if (!q || selectedPatient) return [];
-    return patients.filter((p) => [p.first_name, p.surname, p.last_name, p.id_number, p.patient_id, p.mobile, p.email].join(" ").toLowerCase().includes(q));
-  }, [patientSearch, patients, selectedPatient]);
-
-  function patientName(p = selectedPatient) {
-    if (!p) return "";
-    return `${p.first_name || ""} ${p.surname || p.last_name || ""}`.trim();
-  }
-
-  function findPatientFromCurrentSearch() {
-    const query = patientSearch.trim().toLowerCase();
-
-    if (!query) return null;
-
-    const exactMatches = patients.filter((patient) => {
-      const fullName = `${patient.first_name || ""} ${
-        patient.surname || patient.last_name || ""
-      }`
-        .trim()
-        .toLowerCase();
-
-      return (
-        patient.id.toLowerCase() === query ||
-        (patient.id_number || "").toLowerCase() === query ||
-        (patient.patient_id || "").toLowerCase() === query ||
-        fullName === query ||
-        (patient.email || "").toLowerCase() === query ||
-        (patient.mobile || "").toLowerCase() === query
-      );
-    });
-
-    return exactMatches.length === 1 ? exactMatches[0] : null;
-  }
-
-  async function resolveSelectedPatient(): Promise<Patient | null> {
-    if (selectedPatient?.id) {
-      return selectedPatient;
-    }
-
-    const exactSearchMatch = findPatientFromCurrentSearch();
-
-    if (exactSearchMatch) {
-      selectPatient(exactSearchMatch);
-      return exactSearchMatch;
-    }
-
-    let storedPatientId = linkedPatientId;
-
-    if (!storedPatientId && typeof window !== "undefined") {
-      storedPatientId = window.sessionStorage.getItem(
-        "carescriber_selected_patient_id"
-      );
-    }
-
-    if (!storedPatientId) {
-      return null;
-    }
-
-    const localPatient = patients.find(
-      (patient) => patient.id === storedPatientId
-    );
-
-    if (localPatient) {
-      selectPatient(localPatient);
-      return localPatient;
-    }
-
-    const { data, error } = await supabase
-      .from("patients")
-      .select("*")
-      .eq("id", storedPatientId)
-      .maybeSingle();
-
-    if (error || !data) {
-      if (error) {
-        console.error("Patient recovery error:", error);
-      }
-      return null;
-    }
-
-    const recoveredPatient = data as Patient;
-    selectPatient(recoveredPatient);
-    return recoveredPatient;
-  }
-
-  function selectPatient(p: Patient) {
-    setSelectedPatient(p);
-    setPatientSearch(patientName(p));
-    setRecipientEmail(p.email || "");
-    setMessage("");
-
-    if (typeof window !== "undefined") {
-      window.sessionStorage.setItem(
-        "carescriber_selected_patient_id",
-        p.id
-      );
-    }
-  }
-
-  function clearSelectedPatient() {
-    setSelectedPatient(null);
-    setPatientSearch("");
-    setRecipientEmail("");
-
-    if (typeof window !== "undefined") {
-      window.sessionStorage.removeItem(
-        "carescriber_selected_patient_id"
-      );
-    }
-  }
-
-  function medicineResults(query: string) {
-    const q = query.trim();
-    if (!q || q.length < 2) return [];
-
-    return medicines
-      .map((m) => ({ medicine: m, score: medicineScore(m, q) }))
-      .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score || (a.medicine.brand || "").localeCompare(b.medicine.brand || ""))
-      .slice(0, 20)
-      .map((r) => r.medicine);
-  }
-
-  function clearIcdSearch(itemId: string) {
-    setIcdSearchResults((current) => ({
-      ...current,
-      [itemId]: [],
-    }));
-    setIcdSearchLoading((current) => ({
-      ...current,
-      [itemId]: false,
-    }));
-  }
-
-  async function searchIcd10(itemId: string, query: string) {
-    const cleanQuery = query
-      .trim()
-      .replace(/[%_,()]/g, " ")
-      .replace(/\s+/g, " ");
-
-    if (cleanQuery.length < 2) {
-      clearIcdSearch(itemId);
-      return;
-    }
-
-    setIcdSearchLoading((current) => ({
-      ...current,
-      [itemId]: true,
-    }));
-
-    const { data, error } = await supabase
-      .from("icd10_codes")
-      .select("id, code, description, category")
-      .eq("active", true)
-      .or(
-        `code.ilike.%${cleanQuery}%,description.ilike.%${cleanQuery}%`
-      )
-      .order("code")
-      .limit(20);
-
-    if (error) {
-      console.error("ICD-10 search error:", error);
-      setIcdSearchResults((current) => ({
-        ...current,
-        [itemId]: [],
-      }));
-      setMessage(
-        "ICD-10 search failed. Confirm the icd10_codes table and read policy are configured: " +
-          error.message
-      );
-    } else {
-      setIcdSearchResults((current) => ({
-        ...current,
-        [itemId]: (data || []) as ICD10Code[],
-      }));
-    }
-
-    setIcdSearchLoading((current) => ({
-      ...current,
-      [itemId]: false,
-    }));
-  }
-
-  function handleIcdSearchChange(itemId: string, value: string) {
-    updateItem(itemId, {
-      icdCode: value,
-      icdDescription: "",
-    });
-
-    const existingTimer = icdSearchTimersRef.current[itemId];
-
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-
-    if (value.trim().length < 2) {
-      clearIcdSearch(itemId);
-      return;
-    }
-
-    icdSearchTimersRef.current[itemId] = setTimeout(() => {
-      void searchIcd10(itemId, value);
-    }, 300);
-  }
-
-  function selectIcd10(itemId: string, icd: ICD10Code) {
-    updateItem(itemId, {
-      icdCode: icd.code,
-      icdDescription: icd.description,
-    });
-
-    clearIcdSearch(itemId);
-  }
-
-  function updateItem(id: string, patch: Partial<ScriptItem>) {
-    setItems((old) => old.map((i) => (i.id === id ? { ...i, ...patch } : i)));
-  }
-
-  function addItem() {
-    setItems((old) => [...old, newItem()]);
-  }
-
-  function removeItem(id: string) {
-    const existingTimer = icdSearchTimersRef.current[id];
-
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      delete icdSearchTimersRef.current[id];
-    }
-
-    setIcdSearchResults((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-
-    setIcdSearchLoading((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-
-    setItems((old) => old.length === 1 ? old : old.filter((i) => i.id !== id));
-  }
-
-  function getCanvasPoint(e: any) {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: clientX - rect.left, y: clientY - rect.top };
-  }
-
-  function startDraw(e: any) {
-    e.preventDefault();
-    setDrawing(true);
-    const point = getCanvasPoint(e);
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!point || !ctx) return;
-    ctx.beginPath();
-    ctx.moveTo(point.x, point.y);
-  }
-
-  function draw(e: any) {
-    if (!drawing) return;
-    e.preventDefault();
-    const point = getCanvasPoint(e);
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!point || !ctx) return;
-    ctx.lineWidth = 3;
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "#0f172a";
-    ctx.lineTo(point.x, point.y);
-    ctx.stroke();
-  }
-
-  function stopDraw() {
-    setDrawing(false);
-    canvasRef.current?.getContext("2d")?.beginPath();
-  }
-
-  function clearSignature() {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
-
-  function signatureDataUrl() {
-    return canvasRef.current?.toDataURL("image/png") || "";
-  }
-
-  function buildPdfHtml() {
+function getMedicationQuantity(item: ScriptItem) {
+  return (
+    item.medicine?.quantity ||
+    item.medicine?.pack_size ||
+    item.dosage ||
+    ""
+  );
+}
+"""
+
+if old_today not in code:
+    raise RuntimeError("today() block not found")
+code = code.replace(old_today, new_today)
+
+# 3) Replace buildPdfHtml() with a compact clinical format.
+pattern_html = re.compile(r"  function buildPdfHtml\(\) \{.*?\n  \}\n\n  function generatePrescriptionPdfBlob\(\)", re.S)
+match = pattern_html.search(code)
+if not match:
+    raise RuntimeError("buildPdfHtml block not found")
+
+new_build_html = r'''  function buildPdfHtml() {
     const p = selectedPatient;
     const pName = patientName() || "Patient not selected";
     const dob = clean(p?.date_of_birth || p?.dob);
     const age = calcAge(dob, p?.age);
     const signature = signatureDataUrl();
+    const weight = getPatientWeight(p);
+    const weightDate = getPatientWeightDate(p);
+    const address = getPatientAddress(p);
+    const issuedAt = formatDateTime(new Date());
 
-    const rows = items.map((item) => {
-      const med = item.medicine;
-      return `<tr>
-        <td>${escapeHtml(item.icdCode || "")}${item.icdDescription ? " | " + escapeHtml(item.icdDescription) : ""}</td>
-        <td>${escapeHtml(med?.brand || item.medicineQuery || "")}</td>
-        <td>${escapeHtml([med?.strength, med?.unit].filter(Boolean).join(" "))}</td>
-        <td>${escapeHtml(item.form || med?.form || "")}</td>
-        <td>${escapeHtml(`${item.dosage} ${item.frequency} ${item.timing} for ${item.duration} days`)}</td>
-        <td>${escapeHtml(item.substitution)}</td>
-        <td>${escapeHtml(item.repeats)}</td>
-        <td>${escapeHtml(item.notes)}</td>
-      </tr>`;
-    }).join("");
+    const rows = items
+      .map((item) => {
+        const med = item.medicine;
+        const strength = [med?.strength, med?.unit].filter(Boolean).join(" ");
+        const medicineTitle = [
+          med?.brand || item.medicineQuery || "",
+          strength,
+          item.form || med?.form || "",
+        ]
+          .filter(Boolean)
+          .join(" - ");
 
-    return `<!doctype html><html><head><title>${escapeHtml(scriptNumber)}</title><style>
-      body{font-family:Arial,Helvetica,sans-serif;color:#111827;margin:28px;font-size:13px}
-      .top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:28px}
-      .logo{font-size:38px;font-weight:800;color:#1d4ed8}.logo span{color:#16a34a}
-      table{width:100%;border-collapse:collapse}.box td{border:1px solid #334155;padding:7px}.rx th{border-bottom:2px solid #111827;text-align:left;padding:7px}.rx td{border-bottom:1px solid #cbd5e1;padding:7px;vertical-align:top}
-      .section{margin-top:22px}.muted{color:#64748b}.sig{margin-top:30px}.sig img{max-width:220px;border-bottom:1px solid #111827}
-      .footer{margin-top:30px;border-top:1px solid #cbd5e1;padding-top:10px;font-size:11px;color:#64748b}
-    </style></head><body>
-      <div class="top">
-        <div><div class="logo">Care<span>Scriber</span></div><div class="muted">Electronic Prescription</div></div>
-        <table class="box" style="max-width:360px"><tbody>
-          <tr><td><b>Prescription issued on</b></td><td>${today()}</td></tr>
-          <tr><td><b>Patient Name</b></td><td>${escapeHtml(pName)}</td></tr>
-          <tr><td><b>Patient Identifier</b></td><td>${escapeHtml(p?.id_number || p?.patient_id || "")}</td></tr>
-          <tr><td><b>Gender</b></td><td>${escapeHtml(clean(p?.gender))}</td></tr>
-          <tr><td><b>Age (DOB)</b></td><td>${escapeHtml(String(age || ""))}${dob ? ` (${escapeHtml(dob)})` : ""}</td></tr>
-          <tr><td><b>Medical Aid Scheme</b></td><td>${escapeHtml(clean(p?.medical_aid))}</td></tr>
-          <tr><td><b>Medical Aid Number</b></td><td>${escapeHtml(clean(p?.medical_aid_number))}</td></tr>
-        </tbody></table>
-      </div>
-      <div class="section"><b>Prescription Details</b><br/>
-        Name: ${escapeHtml(doctorName)}<br/>
-        Professional Council No: ${escapeHtml(hpcsa || "Not captured")}<br/>
-        Practice Name: ${escapeHtml(practiceNumber || "Not captured")}<br/>
-        Tel: ${escapeHtml(doctorMobile)}<br/>
-        Email: ${escapeHtml(doctorEmail)}<br/>
-        Address: ${escapeHtml(practiceAddress)}
-      </div>
-      <div class="section"><table class="rx"><thead><tr><th>ICD</th><th>MEDICATION</th><th>DOSAGE</th><th>FORM</th><th>INSTRUCTIONS</th><th>SUBSTITUTION</th><th>REPEATS</th><th>NOTES</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="sig">${signature ? `<img src="${signature}" />` : "<p>Signature not captured</p>"}<br/><b>Doctor Signature</b></div>
-      <div class="footer">Script No: ${escapeHtml(scriptNumber)}. This prescription must be clinically checked by the prescriber before dispensing. QR verification can be added when the verification route is live.</div>
-    </body></html>`;
+        const directions = [
+          `${item.dosage} ${item.form || med?.form || ""}`.trim(),
+          item.frequency,
+          item.timing,
+          item.duration ? `for ${item.duration} day${item.duration === "1" ? "" : "s"}` : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
+
+        const extra = [
+          `Repeats: ${item.repeats}`,
+          item.substitution,
+          item.notes,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+        return `<tr>
+          <td class="icd"><b>${escapeHtml(item.icdCode || "")}</b>${
+            item.icdDescription
+              ? `<div class="small">${escapeHtml(item.icdDescription)}</div>`
+              : ""
+          }</td>
+          <td class="med">
+            <b>${escapeHtml(medicineTitle)}</b>
+            <div>${escapeHtml(directions)}</div>
+            ${extra ? `<div class="small">${escapeHtml(extra)}</div>` : ""}
+          </td>
+          <td class="qty">${escapeHtml(getMedicationQuantity(item))}</td>
+        </tr>`;
+      })
+      .join("");
+
+    return `<!doctype html>
+<html>
+<head>
+  <title>${escapeHtml(scriptNumber)}</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:24px;font-size:12px}
+    .header{text-align:center;border-bottom:1px solid #bbb;padding-bottom:10px}
+    .brand{font-size:23px;font-weight:800}
+    .brand span{color:#15803d}
+    .practice-no{margin-top:3px;color:#444}
+    .two-col{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:12px}
+    .block-title{font-weight:700;font-size:13px;margin-bottom:5px}
+    .line{line-height:1.45}
+    .rx-title{text-align:center;font-size:16px;font-weight:700;margin:12px 0 2px}
+    .rx-date{text-align:right;font-size:11px;margin-bottom:7px}
+    .patient{width:100%;border-collapse:collapse;background:#f6f6f6}
+    .patient td{padding:5px 7px;vertical-align:top}
+    .patient .label{width:16%;color:#555}
+    .patient .value{width:34%;font-weight:600}
+    .address{white-space:pre-line}
+    .rx{width:100%;border-collapse:collapse;margin-top:10px}
+    .rx th{background:#f0f0f0;border-bottom:1px solid #777;text-align:left;padding:6px}
+    .rx td{border-bottom:1px solid #ddd;padding:7px 6px;vertical-align:top}
+    .rx .icd{width:18%}.rx .med{width:70%}.rx .qty{width:12%;text-align:center}
+    .small{font-size:10px;color:#555;margin-top:2px}
+    .end{margin-top:7px;font-size:11px}
+    .signature{margin-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:30px;align-items:end}
+    .signature img{max-width:190px;max-height:70px}
+    .sig-line{border-top:1px solid #222;padding-top:5px;max-width:220px}
+    .footer{position:fixed;bottom:18px;left:24px;right:24px;border-top:1px solid #ddd;padding-top:6px;font-size:9px;color:#666;display:flex;justify-content:space-between}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">Care<span>Scriber</span></div>
+    <div class="practice-no">Practice number: ${escapeHtml(practiceNumber || "Not captured")}</div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="block-title">Practice details</div>
+      <div class="line">${escapeHtml(practiceAddress || "Practice address not captured")}</div>
+      <div class="line">${escapeHtml(doctorMobile || "")}</div>
+      <div class="line">${escapeHtml(doctorEmail || "")}</div>
+    </div>
+    <div>
+      <div class="block-title">Treating provider</div>
+      <div class="line"><b>${escapeHtml(doctorName)}</b></div>
+      <div class="line">HPCSA / Council No: ${escapeHtml(hpcsa || "Not captured")}</div>
+      <div class="line">Practice No: ${escapeHtml(practiceNumber || "Not captured")}</div>
+    </div>
+  </div>
+
+  <div class="rx-title">Prescription</div>
+  <div class="rx-date">${escapeHtml(issuedAt)} · Script ${escapeHtml(scriptNumber)}</div>
+
+  <table class="patient">
+    <tbody>
+      <tr>
+        <td class="label">Patient</td>
+        <td class="value">${escapeHtml(pName)}</td>
+        <td class="label">Medical aid</td>
+        <td class="value">${escapeHtml(clean(p?.medical_aid) || "Not captured")}</td>
+      </tr>
+      <tr>
+        <td class="label">DOB / Age</td>
+        <td class="value">${escapeHtml(dob ? `${formatDate(dob)} / ${age || ""}` : String(age || "Not captured"))}</td>
+        <td class="label">Member no.</td>
+        <td class="value">${escapeHtml(clean(p?.medical_aid_number) || "Not captured")}</td>
+      </tr>
+      <tr>
+        <td class="label">ID / Passport</td>
+        <td class="value">${escapeHtml(p?.id_number || p?.patient_id || "Not captured")}</td>
+        <td class="label">Current weight</td>
+        <td class="value">${escapeHtml(weight || "Not captured")}${
+          weightDate ? ` <span class="small">(updated ${escapeHtml(weightDate)})</span>` : ""
+        }</td>
+      </tr>
+      <tr>
+        <td class="label">Contact no.</td>
+        <td class="value">${escapeHtml(clean(p?.mobile) || "Not captured")}</td>
+        <td class="label">Gender</td>
+        <td class="value">${escapeHtml(clean(p?.gender) || "Not captured")}</td>
+      </tr>
+      <tr>
+        <td class="label">Patient address</td>
+        <td class="value address" colspan="3">${escapeHtml(address || "Not captured")}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <table class="rx">
+    <thead>
+      <tr>
+        <th>Diagnosis / ICD-10</th>
+        <th>Description / Directions</th>
+        <th>Quantity</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+
+  <div class="end">End of prescription · ${items.length} item(s)</div>
+
+  <div class="signature">
+    <div>
+      ${signature ? `<img src="${signature}" alt="Doctor signature" />` : ""}
+      <div class="sig-line"><b>${escapeHtml(doctorName)}</b><br/>HPCSA / Council: ${escapeHtml(hpcsa || "Not captured")}</div>
+    </div>
+    <div class="small">
+      This prescription must be clinically checked and signed by the prescriber before dispensing.
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>CareScriber Electronic Prescription · ${escapeHtml(scriptNumber)}</span>
+    <span>Page 1</span>
+  </div>
+</body>
+</html>`;
   }
 
-  function generatePrescriptionPdfBlob() {
+  function generatePrescriptionPdfBlob()'''
+
+code = code[:match.start()] + new_build_html + code[match.end():]
+
+# 4) Replace generatePrescriptionPdfBlob() with a compact A4 portrait layout.
+pattern_pdf = re.compile(r"  function generatePrescriptionPdfBlob\(\) \{.*?\n  \}\n\n  async function printPdf\(\)", re.S)
+match = pattern_pdf.search(code)
+if not match:
+    raise RuntimeError("generatePrescriptionPdfBlob block not found")
+
+new_pdf = r'''  function generatePrescriptionPdfBlob() {
     const patient = selectedPatient;
     const patientFullName = patientName() || "Patient not selected";
     const dob = clean(patient?.date_of_birth || patient?.dob);
     const age = calcAge(dob, patient?.age);
     const signature = signatureDataUrl();
+    const weight = getPatientWeight(patient);
+    const weightDate = getPatientWeightDate(patient);
+    const address = getPatientAddress(patient);
+    const issuedAt = formatDateTime(new Date());
 
     const pdf = new jsPDF({
       orientation: "portrait",
@@ -891,470 +375,373 @@ export default function EScriptPage() {
     });
 
     const pageWidth = pdf.internal.pageSize.getWidth();
-    const left = 16;
-    const right = pageWidth - 16;
-    let y = 18;
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 14;
+    const contentWidth = pageWidth - margin * 2;
+    const right = pageWidth - margin;
+    const footerY = pageHeight - 10;
 
-    function ensureSpace(required = 18) {
-      if (y + required > 282) {
-        pdf.addPage();
-        y = 18;
-      }
+    function setText(fontSize = 9, bold = false, color = 25) {
+      pdf.setFont("helvetica", bold ? "bold" : "normal");
+      pdf.setFontSize(fontSize);
+      pdf.setTextColor(color);
     }
 
-    function addLabelValue(label: string, value: string) {
-      ensureSpace(9);
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(10);
-      pdf.text(`${label}:`, left, y);
-
-      pdf.setFont("helvetica", "normal");
-      const lines = pdf.splitTextToSize(value || "Not captured", right - left - 42);
-      pdf.text(lines, left + 42, y);
-      y += Math.max(6, lines.length * 5);
+    function drawFooter(pageNo: number) {
+      pdf.setDrawColor(210);
+      pdf.line(margin, pageHeight - 15, right, pageHeight - 15);
+      setText(7.5, false, 100);
+      pdf.text(
+        `CareScriber Electronic Prescription · ${scriptNumber}`,
+        margin,
+        footerY
+      );
+      pdf.text(`Page ${pageNo}`, right, footerY, { align: "right" });
     }
 
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(24);
-    pdf.text("CareScriber", left, y);
-    y += 8;
+    function startNewPage() {
+      drawFooter(pdf.getNumberOfPages());
+      pdf.addPage();
+      return 18;
+    }
 
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(11);
-    pdf.text("Electronic Prescription", left, y);
-    y += 10;
+    function ensureSpace(y: number, required = 20) {
+      return y + required > pageHeight - 20 ? startNewPage() : y;
+    }
 
-    pdf.setDrawColor(203, 213, 225);
-    pdf.line(left, y, right, y);
-    y += 8;
+    function textInCell(
+      value: string,
+      x: number,
+      y: number,
+      width: number,
+      options?: { bold?: boolean; size?: number; color?: number }
+    ) {
+      setText(
+        options?.size ?? 8.5,
+        options?.bold ?? false,
+        options?.color ?? 30
+      );
+      const lines = pdf.splitTextToSize(value || "Not captured", width);
+      pdf.text(lines, x, y);
+      return lines.length;
+    }
 
-    addLabelValue("Script number", scriptNumber);
-    addLabelValue("Issued on", today());
-    addLabelValue("Patient", patientFullName);
-    addLabelValue(
-      "Patient identifier",
-      patient?.id_number || patient?.patient_id || "Not captured"
-    );
-    addLabelValue("Gender", clean(patient?.gender) || "Not captured");
-    addLabelValue(
-      "Age / DOB",
-      `${age || "Not captured"}${dob ? ` / ${dob}` : ""}`
-    );
-    addLabelValue("Mobile", clean(patient?.mobile) || "Not captured");
-    addLabelValue("Email", clean(patient?.email) || "Not captured");
-    addLabelValue("Medical aid", clean(patient?.medical_aid) || "Not captured");
-    addLabelValue(
-      "Medical aid number",
-      clean(patient?.medical_aid_number) || "Not captured"
-    );
-
-    y += 4;
-    ensureSpace(20);
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(14);
-    pdf.text("Prescriber", left, y);
-    y += 8;
-
-    addLabelValue("Doctor", doctorName);
-    addLabelValue("HPCSA / Council", hpcsa || "Not captured");
-    addLabelValue("Practice number", practiceNumber || "Not captured");
-    addLabelValue("Mobile", doctorMobile || "Not captured");
-    addLabelValue("Email", doctorEmail || "Not captured");
-    addLabelValue("Practice address", practiceAddress || "Not captured");
-
+    // Header
+    let y = 14;
+    setText(19, true, 20);
+    pdf.text("CareScriber", pageWidth / 2, y, { align: "center" });
     y += 5;
-    ensureSpace(20);
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(14);
-    pdf.text("Prescription", left, y);
-    y += 8;
 
-    items.forEach((item, index) => {
-      ensureSpace(42);
+    setText(8.5, false, 80);
+    pdf.text(
+      `Practice number: ${practiceNumber || "Not captured"}`,
+      pageWidth / 2,
+      y,
+      { align: "center" }
+    );
+    y += 5;
 
-      const medicineName =
-        item.medicine?.brand || item.medicineQuery || "Medicine not captured";
-      const strength = [item.medicine?.strength, item.medicine?.unit]
-        .filter(Boolean)
-        .join(" ");
+    pdf.setDrawColor(175);
+    pdf.line(margin, y, right, y);
+    y += 6;
 
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(11);
-      pdf.text(`${index + 1}. ${medicineName}`, left, y);
-      y += 6;
+    // Practice / treating provider header in two columns.
+    const colGap = 8;
+    const colWidth = (contentWidth - colGap) / 2;
+    const leftX = margin;
+    const rightX = margin + colWidth + colGap;
+    const headerTop = y;
 
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
+    setText(9.5, true);
+    pdf.text("Practice details", leftX, y);
+    pdf.text("Treating provider", rightX, y);
+    y += 4.5;
 
-      const details = [
-        item.icdCode
-          ? `ICD-10: ${item.icdCode}${
-              item.icdDescription ? ` — ${item.icdDescription}` : ""
-            }`
-          : "",
-        strength ? `Strength: ${strength}` : "",
-        `Directions: ${item.dosage} ${item.form} ${item.frequency} ${item.timing} for ${item.duration} days`,
-        `Repeats: ${item.repeats}`,
-        `Substitution: ${item.substitution}`,
-        item.notes ? `Notes: ${item.notes}` : "",
-      ].filter(Boolean);
+    setText(8.2, false);
+    const practiceLines = pdf.splitTextToSize(
+      [practiceAddress, doctorMobile, doctorEmail].filter(Boolean).join("\n") ||
+        "Practice details not captured",
+      colWidth
+    );
+    pdf.text(practiceLines, leftX, y);
 
-      details.forEach((line) => {
-        const wrapped = pdf.splitTextToSize(line, right - left);
-        ensureSpace(wrapped.length * 5 + 2);
-        pdf.text(wrapped, left + 4, y);
-        y += wrapped.length * 5;
-      });
+    const providerLines = pdf.splitTextToSize(
+      [
+        doctorName,
+        `HPCSA / Council No: ${hpcsa || "Not captured"}`,
+        `Practice No: ${practiceNumber || "Not captured"}`,
+      ].join("\n"),
+      colWidth
+    );
+    pdf.text(providerLines, rightX, y);
 
-      y += 5;
+    const headerHeight =
+      Math.max(practiceLines.length, providerLines.length) * 4 + 2;
+    y = headerTop + 5 + headerHeight;
+
+    // Prescription heading.
+    setText(12, true);
+    pdf.text("Prescription", pageWidth / 2, y, { align: "center" });
+    setText(8, false, 70);
+    pdf.text(`${issuedAt}  ·  ${scriptNumber}`, right, y, {
+      align: "right",
+    });
+    y += 5;
+
+    // Patient details box - two column layout.
+    const patientTop = y;
+    const rowHeights = [7, 7, 7, 7, 11];
+    const patientBoxHeight = rowHeights.reduce((a, b) => a + b, 0);
+    pdf.setFillColor(247, 247, 247);
+    pdf.rect(margin, patientTop, contentWidth, patientBoxHeight, "F");
+    pdf.setDrawColor(220);
+    pdf.rect(margin, patientTop, contentWidth, patientBoxHeight);
+
+    const half = contentWidth / 2;
+    const labelW = 29;
+    let rowY = patientTop;
+
+    const rows = [
+      [
+        ["Patient", patientFullName],
+        ["Medical aid", clean(patient?.medical_aid) || "Not captured"],
+      ],
+      [
+        [
+          "DOB / Age",
+          dob
+            ? `${formatDate(dob)} / ${age || ""}`
+            : String(age || "Not captured"),
+        ],
+        [
+          "Member no.",
+          clean(patient?.medical_aid_number) || "Not captured",
+        ],
+      ],
+      [
+        [
+          "ID / Passport",
+          patient?.id_number || patient?.patient_id || "Not captured",
+        ],
+        [
+          "Current weight",
+          `${weight || "Not captured"}${
+            weightDate ? ` (updated ${weightDate})` : ""
+          }`,
+        ],
+      ],
+      [
+        ["Contact no.", clean(patient?.mobile) || "Not captured"],
+        ["Gender", clean(patient?.gender) || "Not captured"],
+      ],
+    ];
+
+    rows.forEach((row, index) => {
+      const baseline = rowY + 4.7;
+      setText(7.5, false, 95);
+      pdf.text(row[0][0], margin + 2, baseline);
+      pdf.text(row[1][0], margin + half + 2, baseline);
+
+      textInCell(
+        row[0][1],
+        margin + labelW,
+        baseline,
+        half - labelW - 3,
+        { bold: true, size: 8 }
+      );
+      textInCell(
+        row[1][1],
+        margin + half + labelW,
+        baseline,
+        half - labelW - 3,
+        { bold: true, size: 8 }
+      );
+
+      rowY += rowHeights[index];
+      pdf.setDrawColor(230);
+      pdf.line(margin, rowY, right, rowY);
     });
 
-    ensureSpace(45);
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(12);
-    pdf.text("Doctor signature", left, y);
-    y += 5;
+    setText(7.5, false, 95);
+    pdf.text("Patient address", margin + 2, rowY + 4.5);
+    textInCell(
+      address || "Not captured",
+      margin + labelW,
+      rowY + 4.5,
+      contentWidth - labelW - 4,
+      { bold: true, size: 8 }
+    );
 
-    if (signature && signature !== "data:,") {
-      try {
-        pdf.addImage(signature, "PNG", left, y, 55, 22);
-        y += 26;
-      } catch {
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(10);
-        pdf.text("Signature image could not be added.", left, y);
-        y += 7;
-      }
-    } else {
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.text("Signature not captured.", left, y);
-      y += 7;
+    y = patientTop + patientBoxHeight + 6;
+
+    // Medication table header.
+    const xIcd = margin;
+    const icdW = 34;
+    const qtyW = 19;
+    const xDesc = xIcd + icdW;
+    const descW = contentWidth - icdW - qtyW;
+    const xQty = xDesc + descW;
+
+    function drawMedicationHeader(currentY: number) {
+      pdf.setFillColor(240, 240, 240);
+      pdf.rect(margin, currentY, contentWidth, 8, "F");
+      pdf.setDrawColor(180);
+      pdf.line(margin, currentY + 8, right, currentY + 8);
+
+      setText(8, true);
+      pdf.text("Diagnosis / ICD-10", xIcd + 2, currentY + 5);
+      pdf.text("Description / Directions", xDesc + 2, currentY + 5);
+      pdf.text("Quantity", xQty + qtyW / 2, currentY + 5, {
+        align: "center",
+      });
+
+      return currentY + 8;
     }
 
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(8);
-    pdf.setTextColor(100);
-    const footer = pdf.splitTextToSize(
-      "This prescription must be clinically checked and signed by the prescriber before dispensing.",
-      right - left
+    y = drawMedicationHeader(y);
+
+    items.forEach((item) => {
+      const med = item.medicine;
+      const strength = [med?.strength, med?.unit].filter(Boolean).join(" ");
+      const medicineTitle = [
+        med?.brand || item.medicineQuery || "Medicine not captured",
+        strength,
+        item.form || med?.form || "",
+      ]
+        .filter(Boolean)
+        .join(" - ");
+
+      const directions = [
+        `${item.dosage} ${item.form || med?.form || ""}`.trim(),
+        item.frequency,
+        item.timing,
+        item.duration
+          ? `for ${item.duration} day${item.duration === "1" ? "" : "s"}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      const extra = [
+        `Repeats: ${item.repeats}`,
+        item.substitution,
+        item.notes,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      const icdText = [
+        item.icdCode || "",
+        item.icdDescription || "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const descTitleLines = pdf.splitTextToSize(
+        medicineTitle,
+        descW - 4
+      );
+      const directionLines = pdf.splitTextToSize(
+        directions,
+        descW - 4
+      );
+      const extraLines = extra
+        ? pdf.splitTextToSize(extra, descW - 4)
+        : [];
+      const icdLines = pdf.splitTextToSize(icdText, icdW - 4);
+
+      const textLines = Math.max(
+        icdLines.length,
+        descTitleLines.length + directionLines.length + extraLines.length
+      );
+      const rowHeight = Math.max(13, textLines * 3.8 + 5);
+
+      if (y + rowHeight > pageHeight - 22) {
+        y = startNewPage();
+        y = drawMedicationHeader(y);
+      }
+
+      const rowTop = y;
+      setText(8, true);
+      pdf.text(icdLines, xIcd + 2, rowTop + 4.5);
+
+      setText(8.5, true);
+      pdf.text(descTitleLines, xDesc + 2, rowTop + 4.5);
+
+      let descY = rowTop + 4.5 + descTitleLines.length * 3.7;
+      setText(8, false);
+      pdf.text(directionLines, xDesc + 2, descY);
+      descY += directionLines.length * 3.7;
+
+      if (extraLines.length) {
+        setText(7.2, false, 90);
+        pdf.text(extraLines, xDesc + 2, descY);
+      }
+
+      setText(8.5, true);
+      pdf.text(
+        getMedicationQuantity(item) || "-",
+        xQty + qtyW / 2,
+        rowTop + 4.5,
+        { align: "center" }
+      );
+
+      pdf.setDrawColor(220);
+      pdf.line(margin, rowTop + rowHeight, right, rowTop + rowHeight);
+
+      y = rowTop + rowHeight;
+    });
+
+    y += 5;
+    y = ensureSpace(y, 37);
+
+    setText(8.5, false);
+    pdf.text(`End of prescription · ${items.length} item(s)`, margin, y);
+    y += 8;
+
+    // Signature.
+    if (signature && signature !== "data:,") {
+      try {
+        pdf.addImage(signature, "PNG", margin, y, 48, 18);
+        y += 20;
+      } catch {
+        y += 3;
+      }
+    } else {
+      y += 12;
+    }
+
+    pdf.setDrawColor(80);
+    pdf.line(margin, y, margin + 56, y);
+    y += 4;
+    setText(8.5, true);
+    pdf.text(doctorName || "Doctor", margin, y);
+    y += 4;
+    setText(7.5, false, 80);
+    pdf.text(
+      `HPCSA / Council: ${hpcsa || "Not captured"}`,
+      margin,
+      y
     );
-    pdf.text(footer, left, 289 - footer.length * 3);
+
+    setText(7.2, false, 100);
+    const clinicalNote = pdf.splitTextToSize(
+      "This prescription must be clinically checked and signed by the prescriber before dispensing.",
+      82
+    );
+    pdf.text(clinicalNote, right - 82, y - 8);
+
+    drawFooter(pdf.getNumberOfPages());
 
     return pdf.output("blob");
   }
 
-  async function printPdf() {
-    try {
-      const patient = await resolveSelectedPatient();
+  async function printPdf()'''
 
-      if (!patient) {
-        setMessage(
-          "Please select the patient by tapping the patient result before creating the PDF."
-        );
-        return;
-      }
+code = code[:match.start()] + new_pdf + code[match.end():]
 
-      const blob = generatePrescriptionPdfBlob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-
-      link.href = url;
-      link.download = `${scriptNumber}.pdf`;
-      link.rel = "noopener";
-
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      window.setTimeout(() => URL.revokeObjectURL(url), 2000);
-      setMessage("Prescription PDF downloaded successfully.");
-    } catch (error) {
-      console.error("PDF generation error:", error);
-      setMessage(
-        error instanceof Error
-          ? "Could not generate the prescription PDF: " + error.message
-          : "Could not generate the prescription PDF."
-      );
-    }
-  }
-
-  async function persistPrescription(options?: {
-    silent?: boolean;
-  }): Promise<boolean> {
-    const patient = await resolveSelectedPatient();
-
-    if (!patient) {
-      setMessage(
-        "Please select the patient by tapping the patient result before saving."
-      );
-      return false;
-    }
-
-    const validItems = items.filter(
-      (item) => item.medicine || item.medicineQuery.trim()
-    );
-
-    if (validItems.length === 0) {
-      setMessage("Please add at least one medicine.");
-      return false;
-    }
-
-    const itemWithoutSelectedIcd = validItems.find(
-      (item) => !item.icdCode.trim() || !item.icdDescription.trim()
-    );
-
-    if (itemWithoutSelectedIcd) {
-      setMessage(
-        "Please search for and select a valid ICD-10 diagnosis from the results for every prescribed medicine."
-      );
-      return false;
-    }
-
-    if (!doctorName.trim() || doctorName.trim().toLowerCase() === "dr") {
-      setMessage("Please complete the doctor's full name.");
-      return false;
-    }
-
-    if (!hpcsa.trim()) {
-      setMessage("Please complete the HPCSA / council number.");
-      return false;
-    }
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      setMessage(
-        userError
-          ? "Doctor login error: " + userError.message
-          : "No logged-in doctor was found."
-      );
-      return false;
-    }
-
-    const payload = {
-      prescription_number: scriptNumber,
-      patient_id: patient.id,
-      patient_name: patientName(patient),
-      doctor_id: user.id,
-      doctor_name: doctorName,
-      doctor_hpcsa: hpcsa,
-      items: validItems,
-      status: "issued",
-      pdf_html: buildPdfHtml(),
-      issued_at: new Date().toISOString(),
-    };
-
-    const { error } = await supabase
-      .from("prescriptions")
-      .upsert(payload, {
-        onConflict: "prescription_number",
-      });
-
-    if (error) {
-      setMessage("Prescription save failed: " + error.message);
-      return false;
-    }
-
-    if (!options?.silent) {
-      setMessage("Prescription saved successfully.");
-    }
-
-    await loadHistory();
-    return true;
-  }
-
-  async function savePrescription() {
-    if (savingPrescription) return;
-
-    setSavingPrescription(true);
-    setMessage("");
-
-    try {
-      await persistPrescription();
-    } catch (error) {
-      console.error("Unexpected prescription save error:", error);
-      setMessage(
-        error instanceof Error
-          ? "Prescription save failed: " + error.message
-          : "An unexpected prescription save error occurred."
-      );
-    } finally {
-      setSavingPrescription(false);
-    }
-  }
-
-  async function emailPrescription() {
-    if (emailing) return;
-
-    const patient = await resolveSelectedPatient();
-
-    if (!patient) {
-      setMessage(
-        "Please select the patient by tapping the patient result before emailing the prescription."
-      );
-      return;
-    }
-
-    const recipient = recipientEmail.trim().toLowerCase();
-
-    if (!recipient || !recipient.includes("@")) {
-      setMessage("Please enter a valid recipient email address.");
-      return;
-    }
-
-    setEmailing(true);
-    setMessage("");
-
-    try {
-      const saved = await persistPrescription({ silent: true });
-
-      if (!saved) {
-        return;
-      }
-
-      const pdfBlob = generatePrescriptionPdfBlob();
-      const pdfBase64 = await blobToBase64(pdfBlob);
-
-      const response = await fetch("/api/prescriptions/email", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          to: recipient,
-          subject: `Electronic Prescription ${scriptNumber} - ${patientName()}`,
-          body: `Good day,
-
-Please find the electronic prescription ${scriptNumber} for ${patientName()} attached.
-
-Prescriber: ${doctorName}
-HPCSA / Council number: ${hpcsa}
-
-This prescription was generated securely using CareScriber.
-
-Kind regards,
-CareScriber
-https://carescriber.com`,
-          filename: `${scriptNumber}.pdf`,
-          pdfBase64,
-          prescriptionNumber: scriptNumber,
-          patientId: patient.id,
-        }),
-      });
-
-      const result = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          result?.error || "The prescription email could not be sent."
-        );
-      }
-
-      await supabase
-        .from("prescriptions")
-        .update({
-          status: "emailed",
-        })
-        .eq("prescription_number", scriptNumber);
-
-      setMessage(
-        `Prescription saved and PDF emailed successfully to ${recipient}.`
-      );
-      await loadHistory();
-    } catch (error) {
-      console.error("Prescription email error:", error);
-      setMessage(
-        error instanceof Error
-          ? "Prescription email failed: " + error.message
-          : "Prescription email failed."
-      );
-    } finally {
-      setEmailing(false);
-    }
-  }
-
-  return (
-    <main style={styles.page}>
-      <section style={styles.card}>
-        <Link href="/dashboard" style={styles.back}>← Back to Dashboard</Link>
-        <div style={styles.tabRow}>
-          <Link href="/dashboard" style={styles.tab}>Dashboard</Link>
-          <Link href="/patients" style={styles.tab}>Patient Info</Link>
-          <Link href="/consultation" style={styles.tab}>Consultation</Link>
-          <Link href="/e-script" style={styles.activeTab}>E-Script</Link>
-          <Link href="/sick-note" style={styles.tab}>Sick Note</Link>
-        </div>
-
-        <p style={styles.kicker}>CareScriber Digital Prescribing</p>
-        <h1 style={styles.title}>E-Script</h1>
-        <p style={styles.subtitle}>Search ICD-10, select medicines from the SA price database, issue a prescription and export a VideoMed-style PDF.</p>
-        <div style={styles.notice}>Medicine database: {loadingMeds ? "Loading..." : `${medicines.length.toLocaleString()} medicines loaded`} · Script No: {scriptNumber}</div>
-
-        <h2 style={styles.heading}>Patient</h2>
-
-        {patientLoading && (
-          <div style={styles.notice}>Loading selected patient...</div>
-        )}
-
-        <input
-          style={styles.input}
-          value={patientSearch}
-          placeholder="Search existing patient by name, ID or mobile"
-          onChange={(e) => {
-            setPatientSearch(e.target.value);
-            setSelectedPatient(null);
-
-            if (typeof window !== "undefined") {
-              window.sessionStorage.removeItem(
-                "carescriber_selected_patient_id"
-              );
-            }
-          }}
-        />
-
-        {!selectedPatient && filteredPatients.length > 0 && (
-          <div style={styles.patientHint}>
-            Tap the patient result below to confirm the patient for this prescription.
-          </div>
-        )}
-
-        {filteredPatients.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            style={styles.patientCard}
-            onClick={() => selectPatient(p)}
-          >
-            <b>{patientName(p)}</b>
-            <span>
-              {p.id_number || p.patient_id || "No ID"} ·{" "}
-              {p.gender || "Gender not captured"} ·{" "}
-              {p.mobile || "No mobile"}
-            </span>
-          </button>
-        ))}
-
-        {patientSearch &&
-          !selectedPatient &&
-          !patientLoading &&
-          filteredPatients.length === 0 && (
-            <p style={styles.muted}>No matching patient found.</p>
-          )}
-
-        {selectedPatient && (
-          <div style={styles.selected}>
-            <div>
-              Selected: {patientName()} · ID:{" "}
-              {selectedPatient.id_number ||
-                selectedPatient.patient_id ||
-                "Not captured"}
-            </div>
-
-            <div>
+# 5) Update selected patient summary to show address + weight/date.
+old_selected = """            <div>
               DOB:{" "}
               {selectedPatient.date_of_birth ||
                 selectedPatient.dob ||
@@ -1362,258 +749,53 @@ https://carescriber.com`,
               · Mobile: {selectedPatient.mobile || "Not captured"}
             </div>
 
-            <button
-              type="button"
-              style={styles.changePatientButton}
-              onClick={clearSelectedPatient}
-            >
-              Change Patient
-            </button>
-          </div>
-        )}
+            <button"""
 
-        <h2 style={styles.heading}>Doctor</h2>
-        {doctorLoading && <div style={styles.notice}>Loading logged-in doctor profile...</div>}
-        <div style={styles.doctorSummary}>
-          <b>{doctorName || "Doctor profile not captured"}</b>
-          <span>HPCSA / Council: {hpcsa || "Missing"} · Practice: {practiceNumber || "Missing"}</span>
-          <span>{doctorEmail || "No email"} · {doctorMobile || "No mobile"}</span>
-          {practiceAddress && <span>{practiceAddress}</span>}
-          <button style={styles.smallEditButton} onClick={() => setEditDoctor((v) => !v)}>
-            {editDoctor ? "Hide Doctor Edit" : "Edit Doctor Details"}
-          </button>
-        </div>
-
-        {editDoctor && (
-          <>
-            <div style={styles.warning}>
-              These details should normally come from the logged-in doctor profile. Complete missing fields once in the profile so the doctor does not need to recapture them.
+new_selected = """            <div>
+              DOB:{" "}
+              {selectedPatient.date_of_birth ||
+                selectedPatient.dob ||
+                "Not captured"}{" "}
+              · Mobile: {selectedPatient.mobile || "Not captured"}
             </div>
-            <div style={styles.grid2}>
-              <input style={styles.input} value={doctorName} onChange={(e) => setDoctorName(e.target.value)} placeholder="Doctor name" />
-              <input style={styles.input} value={hpcsa} onChange={(e) => setHpcsa(e.target.value)} placeholder="HPCSA / council no" />
-              <input style={styles.input} value={practiceNumber} onChange={(e) => setPracticeNumber(e.target.value)} placeholder="Practice number" />
-              <input style={styles.input} value={doctorMobile} onChange={(e) => setDoctorMobile(e.target.value)} placeholder="Doctor mobile" />
-              <input style={styles.input} value={doctorEmail} onChange={(e) => setDoctorEmail(e.target.value)} placeholder="Doctor email" />
-            </div>
-            <textarea style={styles.textareaSmall} value={practiceAddress} onChange={(e) => setPracticeAddress(e.target.value)} placeholder="Practice address" />
-            <button
-              type="button"
-              style={styles.saveDoctorButton}
-              onClick={saveDoctorProfile}
-              disabled={doctorSaving}
-            >
-              {doctorSaving ? "Saving Doctor Details..." : "Save Doctor Details"}
-            </button>
-          </>
-        )}
 
-        <h2 style={styles.heading}>Proposed Rx</h2>
-        {items.map((item, index) => (
-          <div key={item.id} style={styles.rxCard}>
-            <div style={styles.rxHeader}><b>Medicine {index + 1}</b><button style={styles.removeButton} onClick={() => removeItem(item.id)}>Remove</button></div>
-            <label style={styles.label}>Diagnosis / ICD-10</label>
-            <input
-              style={styles.input}
-              value={
-                item.icdDescription
-                  ? `${item.icdCode} — ${item.icdDescription}`
-                  : item.icdCode
-              }
-              placeholder="Search by ICD-10 code or diagnosis"
-              onChange={(e) => handleIcdSearchChange(item.id, e.target.value)}
-              autoComplete="off"
-            />
-
-            {icdSearchLoading[item.id] && (
-              <div style={styles.searchStatus}>Searching ICD-10 codes...</div>
-            )}
-
-            {!icdSearchLoading[item.id] &&
-              !item.icdDescription &&
-              item.icdCode.trim().length >= 2 &&
-              (icdSearchResults[item.id] || []).length === 0 && (
-                <div style={styles.searchStatus}>
-                  No matching ICD-10 code found. Try another code or diagnosis.
-                </div>
-              )}
-
-            {(icdSearchResults[item.id] || []).length > 0 &&
-              !item.icdDescription && (
-                <div style={styles.resultBox}>
-                  {(icdSearchResults[item.id] || []).map((icd) => (
-                    <button
-                      key={icd.id}
-                      type="button"
-                      style={styles.resultItem}
-                      onClick={() => selectIcd10(item.id, icd)}
-                    >
-                      <b>{icd.code}</b> | {icd.description}
-                      {icd.category ? ` · ${icd.category}` : ""}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-            {item.icdDescription && (
-              <div style={styles.icdSelected}>
-                Selected ICD-10: <b>{item.icdCode}</b> —{" "}
-                {item.icdDescription}
-                <button
-                  type="button"
-                  style={styles.clearIcdButton}
-                  onClick={() => {
-                    updateItem(item.id, {
-                      icdCode: "",
-                      icdDescription: "",
-                    });
-                    clearIcdSearch(item.id);
-                  }}
-                >
-                  Change
-                </button>
-              </div>
-            )}
-
-            <label style={styles.label}>Medication</label>
-            <input style={styles.input} value={item.medicineQuery} placeholder="Type medicine name, active ingredient or NAPPI" onChange={(e) => updateItem(item.id, { medicineQuery: e.target.value, medicine: undefined })} />
-            {medicineResults(item.medicineQuery).length > 0 && !item.medicine && <div style={styles.resultBox}>{medicineResults(item.medicineQuery).map((med) => <button key={`${med.nappi}-${med.brand}`} style={styles.resultItem} onClick={() => updateItem(item.id, { medicine: med, medicineQuery: `${med.brand} ${med.strength}${med.unit ? " " + med.unit : ""}` , form: med.form || item.form })}><b>{med.brand}</b> {med.strength}{med.unit} · {med.active} · {med.schedule} · NAPPI {med.nappi}</button>)}</div>}
-            {item.medicine && <div style={styles.medSelected}>{item.medicine.brand} · {item.medicine.active} · {item.medicine.schedule} · SEP R{item.medicine.sep || "N/A"}</div>}
-
-            <div style={styles.grid2}>
-              <label style={styles.fieldLabel}>Dose / Quantity
-                <input style={styles.input} value={item.dosage} onChange={(e) => updateItem(item.id, { dosage: e.target.value })} placeholder="e.g. 1" />
-              </label>
-
-              <label style={styles.fieldLabel}>Form
-                <select style={styles.input} value={item.form} onChange={(e) => updateItem(item.id, { form: e.target.value })}>{forms.map((f) => <option key={f}>{f}</option>)}</select>
-              </label>
-
-              <label style={styles.fieldLabel}>Frequency
-                <select style={styles.input} value={item.frequency} onChange={(e) => updateItem(item.id, { frequency: e.target.value })}>{frequencies.map((f) => <option key={f}>{f}</option>)}</select>
-              </label>
-
-              <label style={styles.fieldLabel}>Days
-                <select style={styles.input} value={item.duration} onChange={(e) => updateItem(item.id, { duration: e.target.value })}>{days.map((d) => <option key={d}>{d}</option>)}</select>
-              </label>
-
-              <label style={styles.fieldLabel}>Repeats
-                <select style={styles.input} value={item.repeats} onChange={(e) => updateItem(item.id, { repeats: e.target.value })}>{repeats.map((r) => <option key={r}>{r}</option>)}</select>
-              </label>
-
-              <label style={styles.fieldLabel}>Substitution
-                <select style={styles.input} value={item.substitution} onChange={(e) => updateItem(item.id, { substitution: e.target.value })}><option>Substitution allowed</option><option>Do not substitute</option></select>
-              </label>
-            </div>
-            <textarea style={styles.textareaSmall} value={item.notes} onChange={(e) => updateItem(item.id, { notes: e.target.value })} placeholder="Notes / counselling instructions" />
-          </div>
-        ))}
-        <button type="button" style={styles.lightButton} onClick={addItem}>+ Add Medicine</button>
-
-        <h2 style={styles.heading}>Doctor Signature</h2>
-        <canvas ref={canvasRef} width={700} height={220} style={styles.canvas} onMouseDown={startDraw} onMouseMove={draw} onMouseUp={stopDraw} onMouseLeave={stopDraw} onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={stopDraw} />
-        <button type="button" style={styles.lightButton} onClick={clearSignature}>Clear Signature</button>
-
-        <h2 style={styles.heading}>Send Prescription</h2>
-        <label style={styles.fieldLabel}>
-          Recipient email
-          <input
-            style={styles.input}
-            type="email"
-            inputMode="email"
-            value={recipientEmail}
-            onChange={(e) => setRecipientEmail(e.target.value)}
-            placeholder="patient@example.com"
-          />
-        </label>
-
-        {message && <div style={styles.message}>{message}</div>}
-
-        <button
-          style={{
-            ...styles.primaryButton,
-            ...(savingPrescription ? styles.disabledButton : {}),
-          }}
-          onClick={savePrescription}
-          disabled={savingPrescription}
-        >
-          {savingPrescription ? "Saving Prescription..." : "Save Prescription"}
-        </button>
-        <button style={styles.pdfButton} onClick={printPdf}>Download / Print PDF</button>
-        <button
-          style={{
-            ...styles.emailButton,
-            ...(emailing ? styles.disabledButton : {}),
-          }}
-          onClick={emailPrescription}
-          disabled={emailing}
-        >
-          {emailing ? "Emailing PDF..." : "Email Prescription PDF"}
-        </button>
-
-        <h2 style={styles.heading}>Prescription History</h2>
-        {history.length === 0 && <p style={styles.muted}>No saved prescription history yet.</p>}
-        {history.map((h) => (
-          <div
-            key={h.id || h.prescription_number}
-            style={styles.historyRow}
-          >
-            <b>{h.prescription_number || "Prescription"}</b>
-            <span>
-              {h.patient_name || "Patient"} ·{" "}
-              {h.created_at
-                ? new Date(h.created_at).toLocaleDateString("en-ZA")
+            <div>
+              Current weight: {getPatientWeight(selectedPatient) || "Not captured"}
+              {getPatientWeightDate(selectedPatient)
+                ? ` · Updated: ${getPatientWeightDate(selectedPatient)}`
                 : ""}
-            </span>
-            <span>Status: {h.status || "issued"}</span>
-          </div>
-        ))}
-      </section>
-    </main>
-  );
-}
+            </div>
 
-const styles: Record<string, CSSProperties> = {
-  page: { minHeight: "100vh", background: "#eef4fb", padding: 18, fontFamily: "Arial, Helvetica, sans-serif", color: "#0f172a" },
-  card: { maxWidth: 900, margin: "0 auto", background: "#fff", borderRadius: 28, padding: 28, boxShadow: "0 20px 60px rgba(15,23,42,.12)" },
-  back: { color: "#2563eb", fontWeight: 900, textDecoration: "none", fontSize: 18 },
-  tabRow: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 },
-  tab: { padding: "12px 14px", borderRadius: 14, background: "#e2e8f0", color: "#0f172a", textDecoration: "none", fontWeight: 900 },
-  activeTab: { padding: "12px 14px", borderRadius: 14, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900 },
-  kicker: { marginTop: 30, color: "#2563eb", fontWeight: 900, fontSize: 18 },
-  title: { fontSize: 56, lineHeight: 1, margin: "12px 0", fontWeight: 900 },
-  subtitle: { fontSize: 22, color: "#526174", lineHeight: 1.45 },
-  notice: { marginTop: 18, background: "#dbeafe", color: "#1e40af", padding: 14, borderRadius: 14, fontWeight: 900 },
-  warning: { marginTop: 12, background: "#fff7ed", color: "#9a3412", padding: 14, borderRadius: 14, fontWeight: 800 },
-  heading: { fontSize: 34, fontWeight: 900, marginTop: 34, marginBottom: 16 },
-  label: { display: "block", fontWeight: 900, marginTop: 14, marginBottom: 6 },
-  fieldLabel: { display: "block", fontWeight: 900, marginTop: 10 },
-  input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10, background: "#fff" },
-  textareaSmall: { width: "100%", boxSizing: "border-box", minHeight: 88, border: "2px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 17, marginTop: 10 },
-  patientHint: { marginTop: 10, background: "#fff7ed", color: "#9a3412", padding: 12, borderRadius: 12, fontWeight: 800 },
-  patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginTop: 10, display: "grid", gap: 6, fontSize: 17 },
-  selected: { marginTop: 14, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17, display: "grid", gap: 8 },
-  changePatientButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#166534", color: "#fff", fontWeight: 900, cursor: "pointer" },
-  doctorSummary: { display: "grid", gap: 6, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, fontSize: 16 },
-  smallEditButton: { justifySelf: "start", border: 0, borderRadius: 12, padding: "10px 12px", background: "#e2e8f0", color: "#0f172a", fontWeight: 900 },
-  saveDoctorButton: { width: "100%", border: 0, borderRadius: 18, padding: 16, background: "#16a34a", color: "#fff", fontWeight: 900, fontSize: 18, marginTop: 14 },
-  muted: { color: "#64748b", fontSize: 17 },
-  grid2: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 },
-  rxCard: { border: "1px solid #cbd5e1", borderRadius: 20, padding: 18, marginBottom: 18, background: "#fbfdff" },
-  rxHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 },
-  removeButton: { border: 0, borderRadius: 12, padding: "10px 12px", background: "#fee2e2", color: "#991b1b", fontWeight: 900 },
-  resultBox: { border: "1px solid #cbd5e1", borderRadius: 16, marginTop: 8, overflow: "hidden", background: "#fff", maxHeight: 260, overflowY: "auto" },
-  resultItem: { display: "block", width: "100%", textAlign: "left", border: 0, borderBottom: "1px solid #e2e8f0", background: "#fff", padding: 14, fontSize: 15 },
-  medSelected: { marginTop: 12, background: "#ecfdf5", color: "#166534", padding: 14, borderRadius: 14, fontWeight: 800 },
-  icdSelected: { marginTop: 12, background: "#eff6ff", color: "#1e40af", padding: 14, borderRadius: 14, fontWeight: 800, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 },
-  clearIcdButton: { marginLeft: "auto", border: 0, borderRadius: 10, padding: "8px 11px", background: "#1d4ed8", color: "#fff", fontWeight: 900, cursor: "pointer" },
-  searchStatus: { marginTop: 8, padding: 12, borderRadius: 12, background: "#f8fafc", color: "#475569", fontWeight: 700 },
-  lightButton: { width: "100%", border: 0, borderRadius: 18, padding: 16, background: "#dbeafe", color: "#1d4ed8", fontWeight: 900, fontSize: 18, marginTop: 14 },
-  primaryButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#2563eb", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 18 },
-  pdfButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#0f172a", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 14 },
-  emailButton: { width: "100%", border: 0, borderRadius: 18, padding: 20, background: "#16a34a", color: "#fff", fontWeight: 900, fontSize: 20, marginTop: 14 },
-  disabledButton: { opacity: 0.65, cursor: "not-allowed" },
-  canvas: { width: "100%", height: 190, border: "2px dashed #cbd5e1", borderRadius: 18, background: "#fff", touchAction: "none" },
-  message: { background: "#e0f2fe", color: "#075985", padding: 14, borderRadius: 14, fontWeight: 800, marginTop: 18 },
-  historyRow: { border: "1px solid #cbd5e1", borderRadius: 16, padding: 14, marginTop: 10, display: "grid", gap: 6 },
-};
+            <div>
+              Patient address: {getPatientAddress(selectedPatient) || "Not captured"}
+            </div>
+
+            <button"""
+
+if old_selected not in code:
+    raise RuntimeError("Selected patient display block not found")
+code = code.replace(old_selected, new_selected)
+
+# 6) Update subtitle to reflect new layout.
+code = code.replace(
+    'issue a prescription and export a VideoMed-style PDF.',
+    'issue a prescription and export a compact professional A4 prescription PDF.'
+)
+
+# Write updated file.
+out = Path("/mnt/data/app_e-script_page_updated.tsx")
+out.write_text(code)
+
+# Basic integrity checks.
+checks = {
+    "patient_weight_fields": "current_weight?" in code,
+    "patient_address_fields": "physical_address?" in code,
+    "weight_helper": "function getPatientWeight" in code,
+    "address_helper": "function getPatientAddress" in code,
+    "compact_pdf": 'pdf.text("Prescription", pageWidth / 2' in code,
+    "selected_patient_weight": "Current weight:" in code,
+    "selected_patient_address": "Patient address:" in code,
+}
+print("Updated:", out)
+print("Characters:", len(code))
+print(checks)
