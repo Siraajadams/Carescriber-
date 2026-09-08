@@ -81,38 +81,64 @@ function lower(value: any) {
 
 /*
 ==========================================================
-MEDICATION NAME PARSER
-
-CareScriber prescriptions.items is JSONB.
-
-This parser supports:
-- medicine: "Amoxicillin"
-- medication: "Amoxicillin"
-- medicine: { name: "Amoxicillin" }
-- medication: { product_name: "Amoxicillin" }
-- nested objects
-- arrays
+MEDICATION PARSER
 ==========================================================
 */
 
-function getMedicationName(item: any): string {
-  if (!item) return "";
-
-  /*
-  Plain text
-  */
-
-  if (typeof item === "string") {
-    return item.trim();
+function getMedicationName(
+  value: any,
+  depth = 0
+): string {
+  if (
+    depth > 8 ||
+    value === null ||
+    value === undefined
+  ) {
+    return "";
   }
 
   /*
-  Arrays
+  Normal string
   */
 
-  if (Array.isArray(item)) {
-    for (const child of item) {
-      const result = getMedicationName(child);
+  if (typeof value === "string") {
+    const text = value.trim();
+
+    if (!text) return "";
+
+    if (
+      text
+        .toLowerCase()
+        .includes("[object object]") ||
+      text.toLowerCase() === "object"
+    ) {
+      return "";
+    }
+
+    return text;
+  }
+
+  /*
+  Ignore numbers and booleans
+  */
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return "";
+  }
+
+  /*
+  Array
+  */
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const result = getMedicationName(
+        item,
+        depth + 1
+      );
 
       if (result) {
         return result;
@@ -122,68 +148,73 @@ function getMedicationName(item: any): string {
     return "";
   }
 
-  if (typeof item !== "object") {
+  /*
+  Must be object from here
+  */
+
+  if (typeof value !== "object") {
     return "";
   }
 
   /*
-  Most likely CareScriber medicine fields
+  Most likely medication keys
   */
 
   const preferredKeys = [
+    "medicineName",
+    "medicine_name",
+    "medicationName",
+    "medication_name",
+    "productName",
+    "product_name",
+    "genericName",
+    "generic_name",
+    "brandName",
+    "brand_name",
+    "drugName",
+    "drug_name",
+
     "medicine",
     "medication",
-    "medication_name",
-    "medicine_name",
-    "drug",
-    "drug_name",
     "product",
-    "product_name",
-    "generic_name",
-    "brand_name",
+    "drug",
+
+    "label",
+    "display",
+    "title",
     "name",
-    "description",
+    "value",
   ];
 
   for (const key of preferredKeys) {
-    if (!(key in item)) continue;
+    if (!(key in value)) continue;
 
-    const value = item[key];
+    const result = getMedicationName(
+      value[key],
+      depth + 1
+    );
 
-    if (
-      typeof value === "string" &&
-      value.trim()
-    ) {
-      return value.trim();
-    }
-
-    if (
-      value &&
-      typeof value === "object"
-    ) {
-      const nested =
-        getMedicationName(value);
-
-      if (nested) {
-        return nested;
-      }
+    if (result) {
+      return result;
     }
   }
 
   /*
-  Search any remaining nested objects
+  Search nested objects
   */
 
-  for (const value of Object.values(item)) {
+  for (const child of Object.values(value)) {
     if (
-      value &&
-      typeof value === "object"
+      child &&
+      typeof child === "object"
     ) {
-      const nested =
-        getMedicationName(value);
+      const result = getMedicationName(
+        child,
+        depth + 1
+      );
 
-      if (nested) {
-        return nested;
+      if (result) {
+        return result;
       }
     }
   }
@@ -193,7 +224,7 @@ function getMedicationName(item: any): string {
 
 /*
 ==========================================================
-GET DASHBOARD
+MAIN GET
 ==========================================================
 */
 
@@ -229,21 +260,19 @@ export async function GET(req: NextRequest) {
     const patientRows =
       allPatients || [];
 
-    /*
-    New patients registered during selected month
-    */
-
     const monthlyNewPatients =
-      patientRows.filter((patient: any) => {
-        const created =
-          patient.created_at;
+      patientRows.filter(
+        (patient: any) => {
+          const created =
+            patient.created_at;
 
-        return (
-          created &&
-          created >= start &&
-          created < end
-        );
-      });
+          return (
+            created &&
+            created >= start &&
+            created < end
+          );
+        }
+      );
 
     /*
     ======================================================
@@ -271,23 +300,6 @@ export async function GET(req: NextRequest) {
       consultations || [];
 
     /*
-    Patients seen during selected month
-    */
-
-    const monthlyPatientIds =
-      new Set<string>();
-
-    consultationRows.forEach(
-      (row: any) => {
-        if (row.patient_id) {
-          monthlyPatientIds.add(
-            String(row.patient_id)
-          );
-        }
-      }
-    );
-
-    /*
     ======================================================
     PRESCRIPTIONS
     ======================================================
@@ -313,8 +325,23 @@ export async function GET(req: NextRequest) {
       prescriptions || [];
 
     /*
-    Patients who received prescriptions
+    ======================================================
+    PATIENTS SEEN THIS MONTH
+    ======================================================
     */
+
+    const monthlyPatientIds =
+      new Set<string>();
+
+    consultationRows.forEach(
+      (row: any) => {
+        if (row.patient_id) {
+          monthlyPatientIds.add(
+            String(row.patient_id)
+          );
+        }
+      }
+    );
 
     prescriptionRows.forEach(
       (row: any) => {
@@ -329,18 +356,6 @@ export async function GET(req: NextRequest) {
     /*
     ======================================================
     REGISTERED DOCTORS
-    ======================================================
-
-    doctors table is currently empty.
-
-    Registered doctors are therefore derived from
-    historical prescription records.
-
-    Primary key:
-    doctor_hpcsa
-
-    Fallback:
-    doctor_name
     ======================================================
     */
 
@@ -365,17 +380,21 @@ export async function GET(req: NextRequest) {
 
     (allPrescriptions || []).forEach(
       (row: any) => {
-        if (row.doctor_hpcsa) {
+        if (row.doctor_id) {
+          registeredDoctorKeys.add(
+            `doctor:${row.doctor_id}`
+          );
+        } else if (
+          row.doctor_hpcsa
+        ) {
           registeredDoctorKeys.add(
             `hpcsa:${lower(
               row.doctor_hpcsa
             )}`
           );
-        } else if (row.doctor_id) {
-          registeredDoctorKeys.add(
-            `doctor:${row.doctor_id}`
-          );
-        } else if (row.doctor_name) {
+        } else if (
+          row.doctor_name
+        ) {
           registeredDoctorKeys.add(
             `name:${lower(
               row.doctor_name
@@ -402,29 +421,33 @@ export async function GET(req: NextRequest) {
       (row: any) => {
         if (row.provider_id) {
           activeDoctorKeys.add(
-            `provider:${row.provider_id}`
+            `doctor:${row.provider_id}`
           );
         }
       }
     );
 
     /*
-    Prescribing doctors
+    Prescription doctors
     */
 
     prescriptionRows.forEach(
       (row: any) => {
-        if (row.doctor_hpcsa) {
+        if (row.doctor_id) {
+          activeDoctorKeys.add(
+            `doctor:${row.doctor_id}`
+          );
+        } else if (
+          row.doctor_hpcsa
+        ) {
           activeDoctorKeys.add(
             `hpcsa:${lower(
               row.doctor_hpcsa
             )}`
           );
-        } else if (row.doctor_id) {
-          activeDoctorKeys.add(
-            `doctor:${row.doctor_id}`
-          );
-        } else if (row.doctor_name) {
+        } else if (
+          row.doctor_name
+        ) {
           activeDoctorKeys.add(
             `name:${lower(
               row.doctor_name
@@ -437,12 +460,6 @@ export async function GET(req: NextRequest) {
     /*
     ======================================================
     PATIENT GENDER
-    ======================================================
-
-    Based on patients seen during selected month.
-
-    If no linked patient IDs exist,
-    fall back to patients registered in the month.
     ======================================================
     */
 
@@ -489,14 +506,6 @@ export async function GET(req: NextRequest) {
     /*
     ======================================================
     ICD-10 ANALYTICS
-    ======================================================
-
-    Current source:
-    prescriptions.icd10_code
-    prescriptions.icd10_description
-
-    Historical rows currently contain NULL,
-    so older months may remain blank.
     ======================================================
     */
 
@@ -574,149 +583,151 @@ export async function GET(req: NextRequest) {
         }
       >();
 
-    prescriptionRows.forEach(
-      (prescription: any) => {
-        let items: any[] = [];
+    for (const prescription of prescriptionRows) {
+      let items: any[] = [];
 
-        /*
-        JSONB array
-        */
+      /*
+      JSONB array
+      */
 
-        if (
-          Array.isArray(
-            prescription.items
-          )
-        ) {
+      if (
+        Array.isArray(
+          prescription.items
+        )
+      ) {
+        items =
+          prescription.items;
+      }
+
+      /*
+      JSONB object
+      */
+
+      else if (
+        prescription.items &&
+        typeof prescription.items ===
+          "object"
+      ) {
+        items = [
+          prescription.items,
+        ];
+      }
+
+      /*
+      JSON text
+      */
+
+      else if (
+        typeof prescription.items ===
+          "string" &&
+        prescription.items.trim()
+      ) {
+        try {
+          const parsed =
+            JSON.parse(
+              prescription.items
+            );
+
           items =
-            prescription.items;
-        }
-
-        /*
-        JSONB object
-        */
-
-        else if (
-          prescription.items &&
-          typeof prescription.items ===
-            "object"
-        ) {
+            Array.isArray(parsed)
+              ? parsed
+              : [parsed];
+        } catch {
           items = [
             prescription.items,
           ];
         }
+      }
 
-        /*
-        JSON stored as text
-        */
+      /*
+      Older format
+      */
 
-        else if (
-          typeof prescription.items ===
-            "string" &&
-          prescription.items.trim()
-        ) {
-          try {
-            const parsed =
-              JSON.parse(
-                prescription.items
-              );
+      if (
+        items.length === 0 &&
+        prescription.medicine
+      ) {
+        items = [
+          {
+            medicine:
+              prescription.medicine,
+          },
+        ];
+      }
 
-            items =
-              Array.isArray(parsed)
-                ? parsed
-                : [parsed];
-          } catch {
-            items = [
-              prescription.items,
-            ];
-          }
+      for (const item of items) {
+        let medication =
+          getMedicationName(item);
+
+        medication =
+          medication
+            .replace(
+              /\[object Object\]/gi,
+              ""
+            )
+            .trim();
+
+        if (!medication) {
+          continue;
         }
 
-        /*
-        Older rows may use medicine column
-        */
+        const invalidValues = [
+          "null",
+          "undefined",
+          "object",
+          "true",
+          "false",
+        ];
 
         if (
-          items.length === 0 &&
-          prescription.medicine
+          invalidValues.includes(
+            medication.toLowerCase()
+          )
         ) {
-          items = [
-            {
-              medicine:
-                prescription.medicine,
-            },
-          ];
+          continue;
         }
 
-        items.forEach(
-          (item: any) => {
-            const medication =
-              getMedicationName(item);
+        const medicationKey =
+          medication.toLowerCase();
 
-            if (!medication) {
-              return;
+        if (
+          !medicationMap.has(
+            medicationKey
+          )
+        ) {
+          medicationMap.set(
+            medicationKey,
+            {
+              medication,
+              count: 0,
+              patients:
+                new Set<string>(),
             }
+          );
+        }
 
-            /*
-            Prevent corrupted display
-            */
+        const record =
+          medicationMap.get(
+            medicationKey
+          )!;
 
-            if (
-              medication ===
-                "[object Object]" ||
-              medication.toLowerCase() ===
-                "object"
-            ) {
-              return;
-            }
+        record.count++;
 
-            const key =
-              medication
-                .trim()
-                .toLowerCase();
+        const patientKey =
+          clean(
+            prescription.patient_id
+          ) ||
+          lower(
+            prescription.patient_name
+          );
 
-            if (
-              !medicationMap.has(key)
-            ) {
-              medicationMap.set(
-                key,
-                {
-                  medication:
-                    medication.trim(),
-                  count: 0,
-                  patients:
-                    new Set<string>(),
-                }
-              );
-            }
-
-            const record =
-              medicationMap.get(
-                key
-              )!;
-
-            record.count++;
-
-            /*
-            Unique patients receiving medicine
-            */
-
-            const patientKey =
-              clean(
-                prescription.patient_id
-              ) ||
-              lower(
-                prescription.patient_name
-              );
-
-            if (patientKey) {
-              record.patients.add(
-                patientKey
-              );
-            }
-          }
-        );
+        if (patientKey) {
+          record.patients.add(
+            patientKey
+          );
+        }
       }
-    );
+    }
 
     const medications =
       Array.from(
@@ -808,28 +819,23 @@ export async function GET(req: NextRequest) {
       >();
 
     /*
-    Prescription-based doctor activity
+    First add prescription activity
     */
 
     prescriptionRows.forEach(
       (row: any) => {
-        const doctorName =
-          clean(row.doctor_name) ||
-          clean(row.doctor_hpcsa) ||
-          "CareScriber Doctor";
-
         let doctorKey = "";
 
-        if (row.doctor_hpcsa) {
+        if (row.doctor_id) {
+          doctorKey =
+            `doctor:${row.doctor_id}`;
+        } else if (
+          row.doctor_hpcsa
+        ) {
           doctorKey =
             `hpcsa:${lower(
               row.doctor_hpcsa
             )}`;
-        } else if (
-          row.doctor_id
-        ) {
-          doctorKey =
-            `doctor:${row.doctor_id}`;
         } else if (
           row.doctor_name
         ) {
@@ -840,6 +846,11 @@ export async function GET(req: NextRequest) {
         }
 
         if (!doctorKey) return;
+
+        const doctorName =
+          clean(row.doctor_name) ||
+          clean(row.doctor_hpcsa) ||
+          "CareScriber Doctor";
 
         if (
           !doctorUsageMap.has(
@@ -882,11 +893,10 @@ export async function GET(req: NextRequest) {
     );
 
     /*
-    Consultation-based activity
+    Add consultation activity.
 
-    provider_id cannot yet be reliably mapped
-    to doctor_name, so consultations are grouped
-    by provider ID.
+    provider_id now maps to the same doctor key
+    when it matches prescriptions.doctor_id.
     */
 
     consultationRows.forEach(
@@ -896,7 +906,7 @@ export async function GET(req: NextRequest) {
         }
 
         const doctorKey =
-          `provider:${row.provider_id}`;
+          `doctor:${row.provider_id}`;
 
         if (
           !doctorUsageMap.has(
@@ -933,6 +943,76 @@ export async function GET(req: NextRequest) {
         }
       }
     );
+
+    /*
+    ======================================================
+    MAP DOCTOR IDs TO PROFILE NAMES
+    ======================================================
+    */
+
+    const doctorIds =
+      Array.from(
+        doctorUsageMap.keys()
+      )
+        .filter((key) =>
+          key.startsWith(
+            "doctor:"
+          )
+        )
+        .map((key) =>
+          key.replace(
+            "doctor:",
+            ""
+          )
+        );
+
+    if (doctorIds.length > 0) {
+      const {
+        data: profiles,
+        error: profilesError,
+      } = await supabase
+        .from("profiles")
+        .select(
+          "id, first_name, surname"
+        )
+        .in("id", doctorIds);
+
+      if (profilesError) {
+        console.error(
+          "Profiles error:",
+          profilesError
+        );
+      }
+
+      (profiles || []).forEach(
+        (profile: any) => {
+          const key =
+            `doctor:${profile.id}`;
+
+          const entry =
+            doctorUsageMap.get(key);
+
+          if (!entry) return;
+
+          const fullName = [
+            profile.first_name,
+            profile.surname,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+
+          if (fullName) {
+            entry.doctor =
+              fullName
+                .toLowerCase()
+                .startsWith("dr ")
+                ? fullName
+                : `Dr ${fullName}`;
+          }
+        }
+      );
+    }
 
     const doctorUsage =
       Array.from(
