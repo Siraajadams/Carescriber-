@@ -59,7 +59,7 @@ function getMonthRange(month: string) {
   };
 }
 
-function clean(value: any) {
+function clean(value: any): string {
   if (value === null || value === undefined) {
     return "";
   }
@@ -75,8 +75,130 @@ function clean(value: any) {
   return "";
 }
 
-function lower(value: any) {
+function lower(value: any): string {
   return clean(value).toLowerCase();
+}
+
+function normalizeItems(raw: any): any[] {
+  if (!raw) return [];
+
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+
+  if (typeof raw === "object") {
+    return [raw];
+  }
+
+  if (
+    typeof raw === "string" &&
+    raw.trim()
+  ) {
+    try {
+      const parsed = JSON.parse(raw);
+
+      return Array.isArray(parsed)
+        ? parsed
+        : [parsed];
+    } catch {
+      return [raw];
+    }
+  }
+
+  return [];
+}
+
+/*
+==========================================================
+GENERIC NESTED VALUE SEARCH
+==========================================================
+*/
+
+function findFirstStringByKeys(
+  value: any,
+  keys: string[],
+  depth = 0
+): string {
+  if (
+    depth > 10 ||
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstStringByKeys(
+        item,
+        keys,
+        depth + 1
+      );
+
+      if (found) return found;
+    }
+
+    return "";
+  }
+
+  if (typeof value !== "object") {
+    return "";
+  }
+
+  /*
+  Search preferred keys first
+  */
+
+  for (const key of keys) {
+    if (!(key in value)) continue;
+
+    const candidate = value[key];
+
+    if (
+      typeof candidate === "string" &&
+      candidate.trim()
+    ) {
+      return candidate.trim();
+    }
+
+    if (
+      candidate &&
+      typeof candidate === "object"
+    ) {
+      const nested = findFirstStringByKeys(
+        candidate,
+        keys,
+        depth + 1
+      );
+
+      if (nested) return nested;
+    }
+  }
+
+  /*
+  Then search deeper
+  */
+
+  for (const child of Object.values(value)) {
+    if (
+      child &&
+      typeof child === "object"
+    ) {
+      const nested = findFirstStringByKeys(
+        child,
+        keys,
+        depth + 1
+      );
+
+      if (nested) return nested;
+    }
+  }
+
+  return "";
 }
 
 /*
@@ -85,82 +207,10 @@ MEDICATION PARSER
 ==========================================================
 */
 
-function getMedicationName(
-  value: any,
-  depth = 0
-): string {
-  if (
-    depth > 8 ||
-    value === null ||
-    value === undefined
-  ) {
-    return "";
-  }
+function getMedicationName(item: any): string {
+  if (!item) return "";
 
-  /*
-  Normal string
-  */
-
-  if (typeof value === "string") {
-    const text = value.trim();
-
-    if (!text) return "";
-
-    if (
-      text
-        .toLowerCase()
-        .includes("[object object]") ||
-      text.toLowerCase() === "object"
-    ) {
-      return "";
-    }
-
-    return text;
-  }
-
-  /*
-  Ignore numbers and booleans
-  */
-
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return "";
-  }
-
-  /*
-  Array
-  */
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const result = getMedicationName(
-        item,
-        depth + 1
-      );
-
-      if (result) {
-        return result;
-      }
-    }
-
-    return "";
-  }
-
-  /*
-  Must be object from here
-  */
-
-  if (typeof value !== "object") {
-    return "";
-  }
-
-  /*
-  Most likely medication keys
-  */
-
-  const preferredKeys = [
+  const keys = [
     "medicineName",
     "medicine_name",
     "medicationName",
@@ -173,53 +223,111 @@ function getMedicationName(
     "brand_name",
     "drugName",
     "drug_name",
-
     "medicine",
     "medication",
     "product",
     "drug",
-
     "label",
     "display",
     "title",
     "name",
-    "value",
   ];
 
-  for (const key of preferredKeys) {
-    if (!(key in value)) continue;
+  const result = findFirstStringByKeys(
+    item,
+    keys
+  );
 
-    const result = getMedicationName(
-      value[key],
-      depth + 1
+  if (!result) return "";
+
+  const cleaned = result
+    .replace(/\[object Object\]/gi, "")
+    .trim();
+
+  if (!cleaned) return "";
+
+  const invalidValues = [
+    "null",
+    "undefined",
+    "object",
+    "true",
+    "false",
+  ];
+
+  if (
+    invalidValues.includes(
+      cleaned.toLowerCase()
+    )
+  ) {
+    return "";
+  }
+
+  return cleaned;
+}
+
+/*
+==========================================================
+ICD-10 PARSER
+==========================================================
+*/
+
+function getIcd10FromItem(item: any) {
+  const codeKeys = [
+    "icd10",
+    "icd10_code",
+    "icd10Code",
+    "icd_code",
+    "diagnosis_code",
+    "diagnosisCode",
+    "code",
+  ];
+
+  const descriptionKeys = [
+    "icd10_description",
+    "icd10Description",
+    "diagnosis_description",
+    "diagnosisDescription",
+    "diagnosis",
+    "description",
+  ];
+
+  let code = findFirstStringByKeys(
+    item,
+    codeKeys
+  );
+
+  let description =
+    findFirstStringByKeys(
+      item,
+      descriptionKeys
     );
 
-    if (result) {
-      return result;
-    }
-  }
-
   /*
-  Search nested objects
+  Defensive cleanup:
+  don't allow obvious medicine-related fields to
+  masquerade as ICD descriptions.
   */
 
-  for (const child of Object.values(value)) {
+  if (
+    code &&
+    !/^[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?$/i.test(
+      code
+    )
+  ) {
+    /*
+    Accept shorter codes like F51 too.
+    */
     if (
-      child &&
-      typeof child === "object"
+      !/^[A-Z][0-9]{2}$/i.test(code)
     ) {
-      const result = getMedicationName(
-        child,
-        depth + 1
-      );
-
-      if (result) {
-        return result;
-      }
+      code = "";
     }
   }
 
-  return "";
+  return {
+    code: clean(code).toUpperCase(),
+    description: clean(description),
+  };
 }
 
 /*
@@ -228,7 +336,9 @@ MAIN GET
 ==========================================================
 */
 
-export async function GET(req: NextRequest) {
+export async function GET(
+  req: NextRequest
+) {
   try {
     const month =
       req.nextUrl.searchParams.get("month") ||
@@ -413,10 +523,6 @@ export async function GET(req: NextRequest) {
     const activeDoctorKeys =
       new Set<string>();
 
-    /*
-    Consultation providers
-    */
-
     consultationRows.forEach(
       (row: any) => {
         if (row.provider_id) {
@@ -426,10 +532,6 @@ export async function GET(req: NextRequest) {
         }
       }
     );
-
-    /*
-    Prescription doctors
-    */
 
     prescriptionRows.forEach(
       (row: any) => {
@@ -467,20 +569,15 @@ export async function GET(req: NextRequest) {
     let female = 0;
     let other = 0;
 
-    let selectedPatients: any[] = [];
-
-    if (monthlyPatientIds.size > 0) {
-      selectedPatients =
-        patientRows.filter(
-          (patient: any) =>
-            monthlyPatientIds.has(
-              String(patient.id)
-            )
-        );
-    } else {
-      selectedPatients =
-        monthlyNewPatients;
-    }
+    const selectedPatients =
+      monthlyPatientIds.size > 0
+        ? patientRows.filter(
+            (patient: any) =>
+              monthlyPatientIds.has(
+                String(patient.id)
+              )
+          )
+        : monthlyNewPatients;
 
     selectedPatients.forEach(
       (patient: any) => {
@@ -507,6 +604,11 @@ export async function GET(req: NextRequest) {
     ======================================================
     ICD-10 ANALYTICS
     ======================================================
+
+    Read from:
+    1. top-level prescription fields
+    2. prescription.items JSON
+    ======================================================
     */
 
     const icdMap = new Map<
@@ -519,40 +621,105 @@ export async function GET(req: NextRequest) {
     >();
 
     prescriptionRows.forEach(
-      (row: any) => {
-        const code =
-          clean(row.icd10_code);
+      (prescription: any) => {
+        let foundAny = false;
 
-        const description =
+        /*
+        TOP-LEVEL ICD
+        */
+
+        const topCode =
           clean(
-            row.icd10_description
+            prescription.icd10_code
+          ).toUpperCase();
+
+        const topDescription =
+          clean(
+            prescription.icd10_description
           );
 
-        if (!code && !description) {
-          return;
+        if (
+          topCode ||
+          topDescription
+        ) {
+          const key =
+            `${topCode}|${topDescription}`
+              .toLowerCase();
+
+          const existing =
+            icdMap.get(key);
+
+          if (existing) {
+            existing.count++;
+          } else {
+            icdMap.set(key, {
+              code:
+                topCode ||
+                "Not recorded",
+
+              description:
+                topDescription ||
+                "Description not recorded",
+
+              count: 1,
+            });
+          }
+
+          foundAny = true;
         }
 
-        const key =
-          `${code}|${description}`
-            .toLowerCase();
+        /*
+        ITEM-LEVEL ICD
+        */
 
-        const existing =
-          icdMap.get(key);
+        const items =
+          normalizeItems(
+            prescription.items
+          );
 
-        if (existing) {
-          existing.count++;
-        } else {
-          icdMap.set(key, {
-            code:
-              code ||
-              "Not recorded",
+        for (const item of items) {
+          const {
+            code,
+            description,
+          } = getIcd10FromItem(
+            item
+          );
 
-            description:
-              description ||
-              "Description not recorded",
+          if (
+            !code &&
+            !description
+          ) {
+            continue;
+          }
 
-            count: 1,
-          });
+          const key =
+            `${code}|${description}`
+              .toLowerCase();
+
+          const existing =
+            icdMap.get(key);
+
+          if (existing) {
+            /*
+            Avoid double counting the exact same ICD
+            if it is already top-level.
+            */
+            if (!foundAny) {
+              existing.count++;
+            }
+          } else {
+            icdMap.set(key, {
+              code:
+                code ||
+                "Not recorded",
+
+              description:
+                description ||
+                "Description not recorded",
+
+              count: 1,
+            });
+          }
         }
       }
     );
@@ -583,151 +750,79 @@ export async function GET(req: NextRequest) {
         }
       >();
 
-    for (const prescription of prescriptionRows) {
-      let items: any[] = [];
+    prescriptionRows.forEach(
+      (prescription: any) => {
+        let items =
+          normalizeItems(
+            prescription.items
+          );
 
-      /*
-      JSONB array
-      */
+        /*
+        Fallback for old records
+        */
 
-      if (
-        Array.isArray(
-          prescription.items
-        )
-      ) {
-        items =
-          prescription.items;
-      }
-
-      /*
-      JSONB object
-      */
-
-      else if (
-        prescription.items &&
-        typeof prescription.items ===
-          "object"
-      ) {
-        items = [
-          prescription.items,
-        ];
-      }
-
-      /*
-      JSON text
-      */
-
-      else if (
-        typeof prescription.items ===
-          "string" &&
-        prescription.items.trim()
-      ) {
-        try {
-          const parsed =
-            JSON.parse(
-              prescription.items
-            );
-
-          items =
-            Array.isArray(parsed)
-              ? parsed
-              : [parsed];
-        } catch {
+        if (
+          items.length === 0 &&
+          prescription.medicine
+        ) {
           items = [
-            prescription.items,
+            {
+              medicine:
+                prescription.medicine,
+            },
           ];
         }
-      }
 
-      /*
-      Older format
-      */
+        for (const item of items) {
+          const medication =
+            getMedicationName(item);
 
-      if (
-        items.length === 0 &&
-        prescription.medicine
-      ) {
-        items = [
-          {
-            medicine:
-              prescription.medicine,
-          },
-        ];
-      }
+          if (!medication) {
+            continue;
+          }
 
-      for (const item of items) {
-        let medication =
-          getMedicationName(item);
+          const medicationKey =
+            medication.toLowerCase();
 
-        medication =
-          medication
-            .replace(
-              /\[object Object\]/gi,
-              ""
+          if (
+            !medicationMap.has(
+              medicationKey
             )
-            .trim();
+          ) {
+            medicationMap.set(
+              medicationKey,
+              {
+                medication,
+                count: 0,
+                patients:
+                  new Set<string>(),
+              }
+            );
+          }
 
-        if (!medication) {
-          continue;
-        }
+          const record =
+            medicationMap.get(
+              medicationKey
+            )!;
 
-        const invalidValues = [
-          "null",
-          "undefined",
-          "object",
-          "true",
-          "false",
-        ];
+          record.count++;
 
-        if (
-          invalidValues.includes(
-            medication.toLowerCase()
-          )
-        ) {
-          continue;
-        }
+          const patientKey =
+            clean(
+              prescription.patient_id
+            ) ||
+            lower(
+              prescription.patient_name
+            );
 
-        const medicationKey =
-          medication.toLowerCase();
-
-        if (
-          !medicationMap.has(
-            medicationKey
-          )
-        ) {
-          medicationMap.set(
-            medicationKey,
-            {
-              medication,
-              count: 0,
-              patients:
-                new Set<string>(),
-            }
-          );
-        }
-
-        const record =
-          medicationMap.get(
-            medicationKey
-          )!;
-
-        record.count++;
-
-        const patientKey =
-          clean(
-            prescription.patient_id
-          ) ||
-          lower(
-            prescription.patient_name
-          );
-
-        if (patientKey) {
-          record.patients.add(
-            patientKey
-          );
+          if (patientKey) {
+            record.patients.add(
+              patientKey
+            );
+          }
         }
       }
-    }
+    );
 
     const medications =
       Array.from(
@@ -819,7 +914,7 @@ export async function GET(req: NextRequest) {
       >();
 
     /*
-    First add prescription activity
+    Prescription activity first
     */
 
     prescriptionRows.forEach(
@@ -893,10 +988,7 @@ export async function GET(req: NextRequest) {
     );
 
     /*
-    Add consultation activity.
-
-    provider_id now maps to the same doctor key
-    when it matches prescriptions.doctor_id.
+    Consultation activity
     */
 
     consultationRows.forEach(
@@ -946,7 +1038,7 @@ export async function GET(req: NextRequest) {
 
     /*
     ======================================================
-    MAP DOCTOR IDs TO PROFILE NAMES
+    MAP PROFILE NAMES
     ======================================================
     */
 
@@ -1041,7 +1133,7 @@ export async function GET(req: NextRequest) {
 
     /*
     ======================================================
-    FINAL RESPONSE
+    RESPONSE
     ======================================================
     */
 
