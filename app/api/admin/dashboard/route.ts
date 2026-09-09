@@ -330,6 +330,172 @@ function getIcd10FromItem(item: any) {
   };
 }
 
+
+function firstValue(row: any, keys: string[]): any {
+  for (const key of keys) {
+    if (row && row[key] !== null && row[key] !== undefined && row[key] !== "") {
+      return row[key];
+    }
+  }
+  return null;
+}
+
+function normaliseReferralPaymentStatus(row: any): string {
+  const raw = lower(
+    firstValue(row, [
+      "payment_status",
+      "paymentStatus",
+      "stripe_status",
+      "stripeStatus",
+      "medical_aid_status",
+      "medicalAidStatus",
+      "payment",
+    ])
+  );
+
+  if (
+    raw.includes("paid") ||
+    raw.includes("confirm") ||
+    raw.includes("success") ||
+    raw.includes("approved")
+  ) {
+    return "Paid";
+  }
+
+  if (
+    raw.includes("fail") ||
+    raw.includes("declin") ||
+    raw.includes("cancel")
+  ) {
+    return "Failed";
+  }
+
+  if (raw.includes("pending") || raw.includes("verif")) {
+    return "Pending";
+  }
+
+  return raw ? clean(firstValue(row, [
+    "payment_status",
+    "paymentStatus",
+    "stripe_status",
+    "stripeStatus",
+    "medical_aid_status",
+    "medicalAidStatus",
+    "payment",
+  ])) : "Not recorded";
+}
+
+function normaliseReferralInboxStatus(row: any): string {
+  const completedAt = firstValue(row, [
+    "completed_at",
+    "completedAt",
+    "consultation_completed_at",
+  ]);
+
+  if (completedAt) return "Completed";
+
+  const raw = lower(
+    firstValue(row, [
+      "status",
+      "referral_status",
+      "referralStatus",
+      "inbox_status",
+      "inboxStatus",
+      "consult_status",
+      "consultStatus",
+    ])
+  );
+
+  if (raw.includes("complete") || raw.includes("closed")) {
+    return "Completed";
+  }
+
+  const acceptedAt = firstValue(row, [
+    "accepted_at",
+    "acceptedAt",
+    "claimed_at",
+    "claimedAt",
+  ]);
+
+  if (
+    acceptedAt ||
+    raw.includes("accept") ||
+    raw.includes("progress") ||
+    raw.includes("claimed")
+  ) {
+    return "Accepted";
+  }
+
+  if (
+    raw.includes("wait") ||
+    raw.includes("pending") ||
+    raw.includes("new") ||
+    raw.includes("open") ||
+    raw.includes("paid")
+  ) {
+    return "Waiting";
+  }
+
+  return raw
+    ? clean(
+        firstValue(row, [
+          "status",
+          "referral_status",
+          "referralStatus",
+          "inbox_status",
+          "inboxStatus",
+          "consult_status",
+          "consultStatus",
+        ])
+      )
+    : "Waiting";
+}
+
+function referralPatientName(row: any): string {
+  return (
+    clean(
+      firstValue(row, [
+        "patient_name",
+        "patientName",
+        "full_name",
+        "fullName",
+        "name",
+      ])
+    ) ||
+    [clean(row?.first_name), clean(row?.surname)]
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    "Patient"
+  );
+}
+
+function referralDoctorName(row: any): string {
+  return (
+    clean(
+      firstValue(row, [
+        "doctor_name",
+        "doctorName",
+        "provider_name",
+        "providerName",
+        "accepted_by_name",
+        "acceptedByName",
+      ])
+    ) ||
+    clean(
+      firstValue(row, [
+        "doctor_email",
+        "provider_email",
+        "accepted_by",
+        "acceptedBy",
+        "doctor_id",
+        "provider_id",
+      ])
+    ) ||
+    ""
+  );
+}
+
 /*
 ==========================================================
 MAIN GET
@@ -871,23 +1037,19 @@ export async function GET(
 
     /*
     ======================================================
-    REFERRALS
+    REFERRALS / VIRTUAL CONSULT INBOX
     ======================================================
     */
 
     const {
-      count: referrals,
+      data: referralData,
       error: referralsError,
     } = await supabase
-      .from(
-        "symptomai_referrals"
-      )
-      .select("id", {
-        count: "exact",
-        head: true,
-      })
+      .from("symptomai_referrals")
+      .select("*")
       .gte("created_at", start)
-      .lt("created_at", end);
+      .lt("created_at", end)
+      .order("created_at", { ascending: false });
 
     if (referralsError) {
       console.error(
@@ -895,6 +1057,92 @@ export async function GET(
         referralsError
       );
     }
+
+    const referralRows =
+      referralData || [];
+
+    const inboxActivity = referralRows
+      .map((row: any) => {
+        const paymentStatus =
+          normaliseReferralPaymentStatus(row);
+
+        const inboxStatus =
+          normaliseReferralInboxStatus(row);
+
+        return {
+          id:
+            clean(row.id) ||
+            clean(row.referral_code) ||
+            clean(row.referralCode),
+
+          createdAt:
+            clean(row.created_at),
+
+          referralCode:
+            clean(
+              firstValue(row, [
+                "referral_code",
+                "referralCode",
+                "code",
+              ])
+            ),
+
+          patient:
+            referralPatientName(row),
+
+          consultationReason:
+            clean(
+              firstValue(row, [
+                "consultation_reason",
+                "consultationReason",
+                "reason",
+                "reason_for_consultation",
+              ])
+            ) || "Not recorded",
+
+          paymentStatus,
+
+          status:
+            inboxStatus,
+
+          doctor:
+            referralDoctorName(row),
+        };
+      })
+      .slice(0, 50);
+
+    const paidReferrals =
+      inboxActivity.filter(
+        (row: any) =>
+          lower(row.paymentStatus) === "paid"
+      ).length;
+
+    const completedReferrals =
+      inboxActivity.filter(
+        (row: any) =>
+          lower(row.status) === "completed"
+      ).length;
+
+    const acceptedReferrals =
+      inboxActivity.filter(
+        (row: any) =>
+          lower(row.status) === "accepted"
+      ).length;
+
+    const waitingReferrals =
+      inboxActivity.filter(
+        (row: any) =>
+          lower(row.status) === "waiting" &&
+          lower(row.paymentStatus) === "paid"
+      ).length;
+
+    const referralConversionRate =
+      paidReferrals > 0
+        ? Math.round(
+            (completedReferrals / paidReferrals) *
+              100
+          )
+        : 0;
 
     /*
     ======================================================
@@ -1162,7 +1410,18 @@ export async function GET(
         sickNotes || 0,
 
       referrals:
-        referrals || 0,
+        referralRows.length,
+
+      inbox: {
+        total: referralRows.length,
+        paid: paidReferrals,
+        waiting: waitingReferrals,
+        accepted: acceptedReferrals,
+        completed: completedReferrals,
+        conversionRate: referralConversionRate,
+      },
+
+      inboxActivity,
 
       gender: {
         male,
