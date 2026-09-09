@@ -12,6 +12,26 @@ type DashboardData = {
   sickNotes: number;
   referrals: number;
 
+  inbox: {
+    total: number;
+    paid: number;
+    waiting: number;
+    accepted: number;
+    completed: number;
+    conversionRate: number;
+  };
+
+  inboxActivity: {
+    id: string;
+    createdAt: string;
+    referralCode: string;
+    patient: string;
+    consultationReason: string;
+    paymentStatus: string;
+    status: string;
+    doctor: string;
+  }[];
+
   gender: {
     male: number;
     female: number;
@@ -335,6 +355,173 @@ export default function AdminDashboardPage() {
           />
         </div>
 
+
+        {/* VIRTUAL CONSULT INBOX ANALYTICS */}
+
+        <section style={sectionStyle}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <h2 style={headingStyle}>
+                Virtual Consult Inbox Analytics
+              </h2>
+
+              <p style={descriptionStyle}>
+                SymptomAI referrals and CareScriber virtual-consult activity
+                during the selected month.
+              </p>
+            </div>
+
+            <div
+              style={{
+                background: "#ecfeff",
+                border: "1px solid #a5f3fc",
+                borderRadius: 12,
+                padding: "10px 14px",
+                minWidth: 150,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "#0e7490",
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                }}
+              >
+                Conversion Rate
+              </div>
+
+              <div
+                style={{
+                  fontSize: 28,
+                  fontWeight: 900,
+                  color: "#155e75",
+                  marginTop: 4,
+                }}
+              >
+                {data.inbox.conversionRate}%
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(160px, 1fr))",
+              gap: 14,
+              marginBottom: 24,
+            }}
+          >
+            <StatCard
+              title="Total Virtual Referrals"
+              value={data.inbox.total}
+            />
+
+            <StatCard
+              title="Paid"
+              value={data.inbox.paid}
+            />
+
+            <StatCard
+              title="Waiting"
+              value={data.inbox.waiting}
+              subtitle="Paid and awaiting doctor"
+            />
+
+            <StatCard
+              title="Accepted"
+              value={data.inbox.accepted}
+            />
+
+            <StatCard
+              title="Completed"
+              value={data.inbox.completed}
+            />
+          </div>
+
+          <div style={tableWrapperStyle}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Date</th>
+                  <th style={thStyle}>Referral</th>
+                  <th style={thStyle}>Patient</th>
+                  <th style={thStyle}>Consultation Reason</th>
+                  <th style={thStyle}>Payment</th>
+                  <th style={thStyle}>Inbox Status</th>
+                  <th style={thStyle}>Doctor</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {data.inboxActivity.map((item, index) => (
+                  <tr key={item.id || `${item.referralCode}-${index}`}>
+                    <td style={tdStyle}>
+                      {item.createdAt
+                        ? new Date(item.createdAt).toLocaleString()
+                        : "-"}
+                    </td>
+
+                    <td style={tdStyle}>
+                      <strong>
+                        {item.referralCode || "-"}
+                      </strong>
+                    </td>
+
+                    <td style={tdStyle}>
+                      {item.patient}
+                    </td>
+
+                    <td style={tdStyle}>
+                      {item.consultationReason}
+                    </td>
+
+                    <td style={tdStyle}>
+                      <StatusBadge
+                        value={item.paymentStatus}
+                      />
+                    </td>
+
+                    <td style={tdStyle}>
+                      <StatusBadge
+                        value={item.status}
+                      />
+                    </td>
+
+                    <td style={tdStyle}>
+                      {item.doctor || "—"}
+                    </td>
+                  </tr>
+                ))}
+
+                {data.inboxActivity.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      style={{
+                        ...tdStyle,
+                        textAlign: "center",
+                        color: "#64748b",
+                      }}
+                    >
+                      No virtual-consult referrals for this month.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         {/* GENDER */}
 
         <section style={sectionStyle}>
@@ -563,6 +750,60 @@ export default function AdminDashboardPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+
+function StatusBadge({
+  value,
+}: {
+  value: string;
+}) {
+  const status = (value || "").toLowerCase();
+
+  let background = "#f1f5f9";
+  let text = "#475569";
+
+  if (
+    status.includes("paid") ||
+    status.includes("complete")
+  ) {
+    background = "#dcfce7";
+    text = "#166534";
+  } else if (
+    status.includes("wait") ||
+    status.includes("pending")
+  ) {
+    background = "#fef3c7";
+    text = "#92400e";
+  } else if (
+    status.includes("accept") ||
+    status.includes("progress")
+  ) {
+    background = "#dbeafe";
+    text = "#1d4ed8";
+  } else if (
+    status.includes("fail") ||
+    status.includes("declin")
+  ) {
+    background = "#fee2e2";
+    text = "#b91c1c";
+  }
+
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "5px 9px",
+        borderRadius: 999,
+        background,
+        color: text,
+        fontSize: 12,
+        fontWeight: 800,
+      }}
+    >
+      {value || "Not recorded"}
+    </span>
   );
 }
 
