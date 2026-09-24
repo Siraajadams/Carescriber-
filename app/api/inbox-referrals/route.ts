@@ -35,28 +35,15 @@ type RawReferral =
 
 type InboxReferral = {
   id: string;
-
   referral_code: string;
   consent_token: string | null;
-
-  // --------------------------------
-  // Referral source
-  // --------------------------------
 
   source: string;
   external_referral_id: string | null;
 
-  // --------------------------------
-  // Consultation
-  // --------------------------------
-
   consultation_reason: string | null;
   consultation_type: string | null;
   clinical_priority: string | null;
-
-  // --------------------------------
-  // Patient
-  // --------------------------------
 
   patient_first_name: string | null;
   patient_surname: string | null;
@@ -72,22 +59,12 @@ type InboxReferral = {
   email: string | null;
   mobile: string | null;
 
-  // --------------------------------
-  // NavCare HIV self-test
-  // --------------------------------
-
   hiv_test_type: string | null;
   hiv_test_result: string | null;
-
-  interpretation_method:
-    string | null;
+  interpretation_method: string | null;
 
   requires_confirmatory_testing:
     boolean | null;
-
-  // --------------------------------
-  // HIV exposure assessment
-  // --------------------------------
 
   recent_exposure:
     boolean | null;
@@ -101,15 +78,8 @@ type InboxReferral = {
   prep_interest:
     boolean | null;
 
-  risk_flags:
-    unknown;
-
-  symptoms:
-    unknown;
-
-  // --------------------------------
-  // Payment
-  // --------------------------------
+  risk_flags: unknown;
+  symptoms: unknown;
 
   payment_status:
     string | null;
@@ -122,10 +92,6 @@ type InboxReferral = {
 
   stripe_session_id:
     string | null;
-
-  // --------------------------------
-  // Queue
-  // --------------------------------
 
   queue_status:
     string | null;
@@ -154,18 +120,9 @@ type InboxReferral = {
   paid_at:
     string | null;
 
-  // --------------------------------
-  // Existing SymptomAI snapshots
-  // --------------------------------
-
-  triage_summary:
-    unknown;
-
-  patient_snapshot:
-    unknown;
-
-  triage_snapshot:
-    unknown;
+  triage_summary: unknown;
+  patient_snapshot: unknown;
+  triage_snapshot: unknown;
 };
 
 
@@ -338,44 +295,13 @@ function getNestedString(
     return null;
   }
 
-  for (
-    const key of keys
-  ) {
+  for (const key of keys) {
     const value =
       stringValue(
         source[key],
       );
 
     if (value) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
-
-function getNestedBoolean(
-  source:
-    Record<string, unknown> | null,
-
-  ...keys: string[]
-): boolean | null {
-  if (!source) {
-    return null;
-  }
-
-  for (
-    const key of keys
-  ) {
-    const value =
-      booleanValue(
-        source[key],
-      );
-
-    if (
-      value !== null
-    ) {
       return value;
     }
   }
@@ -402,10 +328,6 @@ function normaliseReferral(
       record.triage_snapshot,
     );
 
-
-  // ----------------------------------------------------
-  // Patient name
-  // ----------------------------------------------------
 
   const firstName =
     stringValue(
@@ -455,10 +377,6 @@ function normaliseReferral(
     null;
 
 
-  // ----------------------------------------------------
-  // Patient identifier
-  // ----------------------------------------------------
-
   const patientId =
     stringValue(
       record.patient_id,
@@ -475,10 +393,6 @@ function normaliseReferral(
       "identity_number",
     );
 
-
-  // ----------------------------------------------------
-  // Consultation reason
-  // ----------------------------------------------------
 
   const consultationReason =
     stringValue(
@@ -497,10 +411,6 @@ function normaliseReferral(
     );
 
 
-  // ----------------------------------------------------
-  // Source
-  // ----------------------------------------------------
-
   const source =
     stringValue(
       record.source,
@@ -512,9 +422,41 @@ function normaliseReferral(
     "symptomai";
 
 
-  // ----------------------------------------------------
-  // Return common CareScriber model
-  // ----------------------------------------------------
+  const rawQueueStatus =
+    stringValue(
+      record.queue_status,
+    );
+
+
+  /*
+   * IMPORTANT:
+   *
+   * Once payment is paid, an empty/pending/new
+   * queue status is treated as WAITING.
+   *
+   * This allows a verified Stripe referral to
+   * enter CareScriber even if the upstream
+   * application did not explicitly set
+   * queue_status = waiting.
+   */
+  let queueStatus =
+    rawQueueStatus;
+
+  if (
+    stringValue(
+      record.payment_status,
+    ) === "paid" &&
+    (
+      !queueStatus ||
+      queueStatus === "pending" ||
+      queueStatus === "new" ||
+      queueStatus === "submitted"
+    )
+  ) {
+    queueStatus =
+      "waiting";
+  }
+
 
   return {
     id:
@@ -619,11 +561,6 @@ function normaliseReferral(
         "phone",
       ),
 
-
-    // ================================================
-    // NavCare HIV self-test
-    // ================================================
-
     hiv_test_type:
       stringValue(
         record.hiv_test_type,
@@ -643,11 +580,6 @@ function normaliseReferral(
       booleanValue(
         record.requires_confirmatory_testing,
       ),
-
-
-    // ================================================
-    // Exposure assessment
-    // ================================================
 
     recent_exposure:
       booleanValue(
@@ -677,11 +609,6 @@ function normaliseReferral(
       record.symptoms ??
       null,
 
-
-    // ================================================
-    // Payment
-    // ================================================
-
     payment_status:
       stringValue(
         record.payment_status,
@@ -702,15 +629,8 @@ function normaliseReferral(
         record.stripe_session_id,
       ),
 
-
-    // ================================================
-    // Queue
-    // ================================================
-
     queue_status:
-      stringValue(
-        record.queue_status,
-      ),
+      queueStatus,
 
     referral_status:
       stringValue(
@@ -756,11 +676,6 @@ function normaliseReferral(
       stringValue(
         record.paid_at,
       ),
-
-
-    // ================================================
-    // Existing SymptomAI fields
-    // ================================================
 
     triage_summary:
       record.triage_summary ??
@@ -815,7 +730,7 @@ function isValidAction(
 
 
 // ======================================================
-// LOAD INBOX
+// LOAD PAID INBOX
 // ======================================================
 
 async function loadPaidInboxReferrals():
@@ -824,15 +739,16 @@ async function loadPaidInboxReferrals():
   const supabase =
     getSupabaseAdmin();
 
-  /*
-   * select("*") is deliberate.
-   *
-   * It keeps the existing SymptomAI
-   * implementation compatible while allowing
-   * additional NavCare fields to be returned
-   * when they exist.
-   */
 
+  /*
+   * PAYMENT STATUS IS NOW THE PRIMARY INBOX FILTER.
+   *
+   * Do NOT filter queue_status here.
+   *
+   * A paid referral with queue_status NULL,
+   * pending, new or submitted must still be
+   * visible to CareScriber.
+   */
   const {
     data,
     error,
@@ -844,20 +760,6 @@ async function loadPaidInboxReferrals():
     .eq(
       "payment_status",
       "paid",
-    )
-    .in(
-      "queue_status",
-      [
-        "waiting",
-        "accepted",
-      ],
-    )
-    .order(
-      "paid_at",
-      {
-        ascending: true,
-        nullsFirst: false,
-      },
     )
     .order(
       "created_at",
@@ -883,10 +785,21 @@ async function loadPaidInboxReferrals():
           record as RawReferral,
         ),
     )
+
+    /*
+     * Do not show completed referrals.
+     *
+     * Waiting, accepted, NULL, pending,
+     * new and submitted are permitted.
+     */
     .filter(
       (referral) =>
         referral.id &&
-        referral.referral_code,
+        referral.referral_code &&
+        referral.queue_status !==
+          "completed" &&
+        referral.referral_status !==
+          "completed",
     );
 }
 
@@ -913,7 +826,16 @@ async function acceptReferral({
       .toISOString();
 
 
-  const completeResult =
+  /*
+   * IMPORTANT:
+   *
+   * We no longer require queue_status = waiting
+   * in the database because older/upstream
+   * referrals may contain NULL/pending/new.
+   *
+   * Payment must still be PAID.
+   */
+  const result =
     await supabase
       .from(
         REFERRAL_TABLE,
@@ -946,36 +868,30 @@ async function acceptReferral({
         "payment_status",
         "paid",
       )
-      .eq(
-        "queue_status",
-        "waiting",
-      )
       .select("*")
       .maybeSingle();
 
 
   if (
-    !completeResult.error &&
-    completeResult.data
+    !result.error &&
+    result.data
   ) {
     return normaliseReferral(
-      completeResult.data
-        as RawReferral,
+      result.data as RawReferral,
     );
   }
 
 
+  /*
+   * Compatibility fallback in case the
+   * database does not yet contain all of
+   * the newer columns.
+   */
   console.warn(
-    "Complete accept update failed. Trying compatible fields:",
-    completeResult.error
-      ?.message,
+    "Full accept update failed. Trying compatibility update:",
+    result.error?.message,
   );
 
-
-  /*
-   * Backwards compatibility with older
-   * SymptomAI table versions.
-   */
 
   const fallbackResult =
     await supabase
@@ -996,10 +912,6 @@ async function acceptReferral({
       .eq(
         "payment_status",
         "paid",
-      )
-      .eq(
-        "queue_status",
-        "waiting",
       )
       .select("*")
       .maybeSingle();
@@ -1045,7 +957,7 @@ async function completeReferral({
       .toISOString();
 
 
-  const completeResult =
+  const result =
     await supabase
       .from(
         REFERRAL_TABLE,
@@ -1080,20 +992,18 @@ async function completeReferral({
 
 
   if (
-    !completeResult.error &&
-    completeResult.data
+    !result.error &&
+    result.data
   ) {
     return normaliseReferral(
-      completeResult.data
-        as RawReferral,
+      result.data as RawReferral,
     );
   }
 
 
   console.warn(
-    "Complete referral update failed. Trying compatible fields:",
-    completeResult.error
-      ?.message,
+    "Full complete update failed. Trying compatibility update:",
+    result.error?.message,
   );
 
 
@@ -1179,7 +1089,7 @@ export async function GET() {
 
 
     console.log(
-      "CareScriber inbox loaded:",
+      "CareScriber paid inbox loaded:",
       {
         count:
           referrals.length,
@@ -1191,33 +1101,32 @@ export async function GET() {
             (
               referral,
             ) => ({
+              id:
+                referral.id,
+
               referralCode:
-                referral
-                  .referral_code,
+                referral.referral_code,
 
               source:
-                referral
-                  .source,
+                referral.source,
+
+              patient:
+                referral.patient_name,
 
               paymentStatus:
-                referral
-                  .payment_status,
+                referral.payment_status,
+
+              paymentAmount:
+                referral.payment_amount,
 
               queueStatus:
-                referral
-                  .queue_status,
+                referral.queue_status,
 
               referralStatus:
-                referral
-                  .referral_status,
+                referral.referral_status,
 
-              hivTestResult:
-                referral
-                  .hiv_test_result,
-
-              confirmatoryTesting:
-                referral
-                  .requires_confirmatory_testing,
+              stripeSessionId:
+                referral.stripe_session_id,
             }),
           ),
       },
@@ -1241,13 +1150,11 @@ export async function GET() {
           paymentStatus:
             "paid",
 
-          queueStatuses: [
-            "waiting",
-            "accepted",
-          ],
+          queueStatus:
+            "waiting/accepted/unset",
 
-          referralStatus:
-            "Not required",
+          completedExcluded:
+            true,
         },
 
         configured: {
@@ -1324,6 +1231,7 @@ export async function PATCH(
 
 
     try {
+
       body =
         (
           await req.json()
@@ -1431,9 +1339,9 @@ export async function PATCH(
     }
 
 
-    // ================================================
+    // ==================================================
     // ACCEPT
-    // ================================================
+    // ==================================================
 
     if (
       body.action ===
@@ -1456,7 +1364,7 @@ export async function PATCH(
               false,
 
             error:
-              "This request has already been accepted or is no longer waiting.",
+              "This request could not be accepted.",
           },
           {
             status: 409,
@@ -1492,9 +1400,9 @@ export async function PATCH(
     }
 
 
-    // ================================================
+    // ==================================================
     // COMPLETE
-    // ================================================
+    // ==================================================
 
     const referral =
       await completeReferral({
@@ -1510,7 +1418,7 @@ export async function PATCH(
           success:
             false,
 
-        error:
+          error:
             "The referral could not be completed.",
         },
         {
