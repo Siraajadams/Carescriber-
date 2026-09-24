@@ -4,10 +4,17 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+const serviceRoleKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const REFERRAL_TABLE = "symptomai_referrals";
+
+/* ============================================================
+   TYPES
+============================================================ */
 
 type InboxAction = "accept" | "complete";
 
@@ -18,23 +25,18 @@ type InboxActionBody = {
   doctorName?: string;
 };
 
-type RawReferral = Record<string, unknown>;
-
 type InboxReferral = {
   id: string;
   referral_code: string;
   consent_token: string | null;
 
-  // Source
   source: string;
   external_referral_id: string | null;
 
-  // Consultation
   consultation_reason: string | null;
   consultation_type: string | null;
   clinical_priority: string | null;
 
-  // Patient
   patient_first_name: string | null;
   patient_surname: string | null;
   patient_name: string | null;
@@ -49,28 +51,33 @@ type InboxReferral = {
   email: string | null;
   mobile: string | null;
 
-  // NavCare / HIVClinTest
   hiv_test_type: string | null;
   hiv_test_result: string | null;
   interpretation_method: string | null;
-  requires_confirmatory_testing: boolean | null;
 
-  // Exposure / prevention assessment
-  recent_exposure: boolean | null;
-  exposure_timing: string | null;
-  pep_urgent_review: boolean | null;
-  prep_interest: boolean | null;
+  requires_confirmatory_testing:
+    boolean | null;
+
+  recent_exposure:
+    boolean | null;
+
+  exposure_timing:
+    string | null;
+
+  pep_urgent_review:
+    boolean | null;
+
+  prep_interest:
+    boolean | null;
 
   risk_flags: unknown;
   symptoms: unknown;
 
-  // Payment
   payment_status: string | null;
   payment_amount: number | null;
   payment_currency: string | null;
   stripe_session_id: string | null;
 
-  // Queue
   queue_status: string | null;
   referral_status: string | null;
 
@@ -84,7 +91,6 @@ type InboxReferral = {
   submitted_at: string | null;
   paid_at: string | null;
 
-  // Existing SymptomAI data
   triage_summary: unknown;
   patient_snapshot: unknown;
   triage_snapshot: unknown;
@@ -95,22 +101,29 @@ type InboxReferral = {
 ============================================================ */
 
 function getSupabaseAdmin() {
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (
+    !supabaseUrl ||
+    !serviceRoleKey
+  ) {
     throw new Error(
       "CareScriber Supabase server credentials are missing."
     );
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
+  return createClient(
+    supabaseUrl,
+    serviceRoleKey,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    }
+  );
 }
 
 /* ============================================================
-   RESPONSE HEADERS
+   NO-CACHE HEADERS
 ============================================================ */
 
 function noStoreHeaders() {
@@ -126,25 +139,41 @@ function noStoreHeaders() {
    VALUE HELPERS
 ============================================================ */
 
-function stringValue(value: unknown): string | null {
-  if (typeof value !== "string") {
+function stringValue(
+  value: unknown
+): string | null {
+  if (
+    typeof value !== "string"
+  ) {
     return null;
   }
 
-  const cleaned = value.trim();
+  const cleaned =
+    value.trim();
 
   return cleaned || null;
 }
 
-function numberValue(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
+function numberValue(
+  value: unknown
+): number | null {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value)
+  ) {
     return value;
   }
 
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
+  if (
+    typeof value === "string" &&
+    value.trim()
+  ) {
+    const parsed =
+      Number(value);
 
-    if (Number.isFinite(parsed)) {
+    if (
+      Number.isFinite(parsed)
+    ) {
       return parsed;
     }
   }
@@ -152,16 +181,28 @@ function numberValue(value: unknown): number | null {
   return null;
 }
 
-function booleanValue(value: unknown): boolean | null {
-  if (typeof value === "boolean") {
+function booleanValue(
+  value: unknown
+): boolean | null {
+  if (
+    typeof value === "boolean"
+  ) {
     return value;
   }
 
-  if (value === "true" || value === "1" || value === 1) {
+  if (
+    value === "true" ||
+    value === "1" ||
+    value === 1
+  ) {
     return true;
   }
 
-  if (value === "false" || value === "0" || value === 0) {
+  if (
+    value === "false" ||
+    value === "0" ||
+    value === 0
+  ) {
     return false;
   }
 
@@ -176,19 +217,28 @@ function objectValue(
     typeof value === "object" &&
     !Array.isArray(value)
   ) {
-    return value as Record<string, unknown>;
+    return value as Record<
+      string,
+      unknown
+    >;
   }
 
-  if (typeof value === "string") {
+  if (
+    typeof value === "string"
+  ) {
     try {
-      const parsed = JSON.parse(value);
+      const parsed =
+        JSON.parse(value);
 
       if (
         parsed &&
         typeof parsed === "object" &&
         !Array.isArray(parsed)
       ) {
-        return parsed as Record<string, unknown>;
+        return parsed as Record<
+          string,
+          unknown
+        >;
       }
     } catch {
       return null;
@@ -199,15 +249,21 @@ function objectValue(
 }
 
 function getNestedString(
-  source: Record<string, unknown> | null,
+  source:
+    Record<string, unknown> | null,
   ...keys: string[]
 ): string | null {
   if (!source) {
     return null;
   }
 
-  for (const key of keys) {
-    const value = stringValue(source[key]);
+  for (
+    const key of keys
+  ) {
+    const value =
+      stringValue(
+        source[key]
+      );
 
     if (value) {
       return value;
@@ -219,25 +275,33 @@ function getNestedString(
 
 /* ============================================================
    NORMALISE REFERRAL
+
+   IMPORTANT:
+   No RawReferral type.
+   No "as RawReferral" casts.
 ============================================================ */
 
 function normaliseReferral(
-  record: RawReferral
+  record: Record<string, any>
 ): InboxReferral {
-  const patientSnapshot = objectValue(
-    record.patient_snapshot
-  );
+  const patientSnapshot =
+    objectValue(
+      record.patient_snapshot
+    );
 
-  const triageSnapshot = objectValue(
-    record.triage_snapshot
-  );
+  const triageSnapshot =
+    objectValue(
+      record.triage_snapshot
+    );
 
   /* ----------------------------------------------------------
-     Patient
+     PATIENT NAME
   ---------------------------------------------------------- */
 
   const firstName =
-    stringValue(record.patient_first_name) ||
+    stringValue(
+      record.patient_first_name
+    ) ||
     getNestedString(
       patientSnapshot,
       "firstName",
@@ -247,7 +311,9 @@ function normaliseReferral(
     );
 
   const surname =
-    stringValue(record.patient_surname) ||
+    stringValue(
+      record.patient_surname
+    ) ||
     getNestedString(
       patientSnapshot,
       "surname",
@@ -257,8 +323,15 @@ function normaliseReferral(
       "patient_surname"
     );
 
+  const combinedName =
+    [firstName, surname]
+      .filter(Boolean)
+      .join(" ");
+
   const patientName =
-    stringValue(record.patient_name) ||
+    stringValue(
+      record.patient_name
+    ) ||
     getNestedString(
       patientSnapshot,
       "patientName",
@@ -267,12 +340,20 @@ function normaliseReferral(
       "fullName",
       "full_name"
     ) ||
-    [firstName, surname].filter(Boolean).join(" ") ||
+    combinedName ||
     null;
 
+  /* ----------------------------------------------------------
+     PATIENT IDENTIFIER
+  ---------------------------------------------------------- */
+
   const patientId =
-    stringValue(record.patient_id) ||
-    stringValue(record.national_id) ||
+    stringValue(
+      record.patient_id
+    ) ||
+    stringValue(
+      record.national_id
+    ) ||
     getNestedString(
       patientSnapshot,
       "patientId",
@@ -286,12 +367,16 @@ function normaliseReferral(
     );
 
   /* ----------------------------------------------------------
-     Consultation reason
+     CONSULTATION REASON
   ---------------------------------------------------------- */
 
   const consultationReason =
-    stringValue(record.consultation_reason) ||
-    stringValue(record.triage_summary) ||
+    stringValue(
+      record.consultation_reason
+    ) ||
+    stringValue(
+      record.triage_summary
+    ) ||
     getNestedString(
       triageSnapshot,
       "consultationReason",
@@ -302,43 +387,58 @@ function normaliseReferral(
     );
 
   /* ----------------------------------------------------------
-     Source
-
-     Existing referrals without a source are treated as
-     SymptomAI referrals for backwards compatibility.
+     SOURCE
   ---------------------------------------------------------- */
 
   const source =
-    stringValue(record.source) ||
-    getNestedString(triageSnapshot, "source") ||
+    stringValue(
+      record.source
+    ) ||
+    getNestedString(
+      triageSnapshot,
+      "source"
+    ) ||
     "symptomai";
 
+  /* ----------------------------------------------------------
+     NORMALISED RESPONSE
+  ---------------------------------------------------------- */
+
   return {
-    id: stringValue(record.id) || "",
+    id:
+      stringValue(
+        record.id
+      ) || "",
 
     referral_code:
-      stringValue(record.referral_code) || "",
+      stringValue(
+        record.referral_code
+      ) || "",
 
     consent_token:
-      stringValue(record.consent_token),
+      stringValue(
+        record.consent_token
+      ),
 
     source,
 
     external_referral_id:
-      stringValue(record.external_referral_id),
-
-    /* Consultation */
+      stringValue(
+        record.external_referral_id
+      ),
 
     consultation_reason:
       consultationReason,
 
     consultation_type:
-      stringValue(record.consultation_type),
+      stringValue(
+        record.consultation_type
+      ),
 
     clinical_priority:
-      stringValue(record.clinical_priority),
-
-    /* Patient */
+      stringValue(
+        record.clinical_priority
+      ),
 
     patient_first_name:
       firstName,
@@ -353,11 +453,15 @@ function normaliseReferral(
       patientId,
 
     national_id:
-      stringValue(record.national_id) ||
+      stringValue(
+        record.national_id
+      ) ||
       patientId,
 
     date_of_birth:
-      stringValue(record.date_of_birth) ||
+      stringValue(
+        record.date_of_birth
+      ) ||
       getNestedString(
         patientSnapshot,
         "dateOfBirth",
@@ -366,144 +470,206 @@ function normaliseReferral(
       ),
 
     gender:
-      stringValue(record.gender) ||
+      stringValue(
+        record.gender
+      ) ||
       getNestedString(
         patientSnapshot,
         "gender"
       ),
 
     country:
-      stringValue(record.country) ||
+      stringValue(
+        record.country
+      ) ||
       getNestedString(
         patientSnapshot,
         "country"
       ),
 
     email:
-      stringValue(record.email) ||
+      stringValue(
+        record.email
+      ) ||
       getNestedString(
         patientSnapshot,
         "email"
       ),
 
     mobile:
-      stringValue(record.mobile) ||
+      stringValue(
+        record.mobile
+      ) ||
       getNestedString(
         patientSnapshot,
         "mobile",
         "mobile_number",
-        "phone"
+        "phone",
+        "phone_number"
       ),
 
-    /* NavCare / HIVClinTest */
+    /* HIV SELF-TEST */
 
     hiv_test_type:
-      stringValue(record.hiv_test_type),
+      stringValue(
+        record.hiv_test_type
+      ),
 
     hiv_test_result:
-      stringValue(record.hiv_test_result),
+      stringValue(
+        record.hiv_test_result
+      ),
 
     interpretation_method:
-      stringValue(record.interpretation_method),
+      stringValue(
+        record.interpretation_method
+      ),
 
     requires_confirmatory_testing:
       booleanValue(
         record.requires_confirmatory_testing
       ),
 
-    /* Exposure assessment */
+    /* EXPOSURE / PREVENTION */
 
     recent_exposure:
-      booleanValue(record.recent_exposure),
+      booleanValue(
+        record.recent_exposure
+      ),
 
     exposure_timing:
-      stringValue(record.exposure_timing),
+      stringValue(
+        record.exposure_timing
+      ),
 
     pep_urgent_review:
-      booleanValue(record.pep_urgent_review),
+      booleanValue(
+        record.pep_urgent_review
+      ),
 
     prep_interest:
-      booleanValue(record.prep_interest),
+      booleanValue(
+        record.prep_interest
+      ),
 
     risk_flags:
-      record.risk_flags ?? null,
+      record.risk_flags ??
+      null,
 
     symptoms:
-      record.symptoms ?? null,
+      record.symptoms ??
+      null,
 
-    /* Payment */
+    /* PAYMENT */
 
     payment_status:
-      stringValue(record.payment_status),
+      stringValue(
+        record.payment_status
+      ),
 
     payment_amount:
-      numberValue(record.payment_amount),
+      numberValue(
+        record.payment_amount
+      ),
 
     payment_currency:
-      stringValue(record.payment_currency),
+      stringValue(
+        record.payment_currency
+      ),
 
     stripe_session_id:
-      stringValue(record.stripe_session_id),
+      stringValue(
+        record.stripe_session_id
+      ),
 
-    /* Queue */
+    /* QUEUE */
 
     queue_status:
-      stringValue(record.queue_status),
+      stringValue(
+        record.queue_status
+      ),
 
     referral_status:
-      stringValue(record.referral_status),
+      stringValue(
+        record.referral_status
+      ),
 
     assigned_doctor_id:
-      stringValue(record.assigned_doctor_id),
+      stringValue(
+        record.assigned_doctor_id
+      ),
 
     assigned_doctor_name:
-      stringValue(record.assigned_doctor_name),
+      stringValue(
+        record.assigned_doctor_name
+      ),
 
     accepted_at:
-      stringValue(record.accepted_at),
+      stringValue(
+        record.accepted_at
+      ),
 
     completed_at:
-      stringValue(record.completed_at),
+      stringValue(
+        record.completed_at
+      ),
 
     created_at:
-      stringValue(record.created_at) ||
-      stringValue(record.submitted_at) ||
-      new Date().toISOString(),
+      stringValue(
+        record.created_at
+      ) ||
+      stringValue(
+        record.submitted_at
+      ) ||
+      new Date()
+        .toISOString(),
 
     submitted_at:
-      stringValue(record.submitted_at),
+      stringValue(
+        record.submitted_at
+      ),
 
     paid_at:
-      stringValue(record.paid_at),
+      stringValue(
+        record.paid_at
+      ),
 
-    /* Existing SymptomAI snapshots */
+    /* EXISTING SNAPSHOTS */
 
     triage_summary:
-      record.triage_summary ?? null,
+      record.triage_summary ??
+      null,
 
     patient_snapshot:
-      record.patient_snapshot ?? null,
+      record.patient_snapshot ??
+      null,
 
     triage_snapshot:
-      record.triage_snapshot ?? null,
+      record.triage_snapshot ??
+      null,
   };
 }
 
 /* ============================================================
-   REQUEST HELPERS
+   CLEAN REQUEST VALUES
 ============================================================ */
 
 function cleanString(
   value: unknown,
   maxLength = 250
 ): string {
-  if (typeof value !== "string") {
+  if (
+    typeof value !== "string"
+  ) {
     return "";
   }
 
   return value
     .trim()
-    .substring(0, maxLength);
+    .substring(
+      0,
+      maxLength
+    );
 }
 
 function isValidAction(
@@ -516,36 +682,46 @@ function isValidAction(
 }
 
 /* ============================================================
-   LOAD PAID INBOX
+   LOAD PAID INBOX REFERRALS
 ============================================================ */
 
-async function loadPaidInboxReferrals(): Promise<
-  InboxReferral[]
-> {
-  const supabase = getSupabaseAdmin();
+async function loadPaidInboxReferrals():
+  Promise<InboxReferral[]> {
+  const supabase =
+    getSupabaseAdmin();
 
-  /*
-   * Keep select("*").
-   *
-   * This supports both existing SymptomAI referrals
-   * and the additional NavCare fields.
-   */
-
-  const { data, error } = await supabase
-    .from(REFERRAL_TABLE)
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      REFERRAL_TABLE
+    )
     .select("*")
-    .eq("payment_status", "paid")
-    .in("queue_status", [
-      "waiting",
-      "accepted",
-    ])
-    .order("paid_at", {
-      ascending: true,
-      nullsFirst: false,
-    })
-    .order("created_at", {
-      ascending: true,
-    });
+    .eq(
+      "payment_status",
+      "paid"
+    )
+    .in(
+      "queue_status",
+      [
+        "waiting",
+        "accepted",
+      ]
+    )
+    .order(
+      "paid_at",
+      {
+        ascending: true,
+        nullsFirst: false,
+      }
+    )
+    .order(
+      "created_at",
+      {
+        ascending: true,
+      }
+    );
 
   if (error) {
     throw new Error(
@@ -553,14 +729,22 @@ async function loadPaidInboxReferrals(): Promise<
     );
   }
 
-  return (data || [])
-    .map((record) =>
-      normaliseReferral(record as RawReferral)
+  const rows =
+    data || [];
+
+  return rows
+    .map(
+      (record) =>
+        normaliseReferral(
+          record
+        )
     )
     .filter(
       (referral) =>
-        referral.id &&
-        referral.referral_code
+        Boolean(
+          referral.id &&
+          referral.referral_code
+        )
     );
 }
 
@@ -577,55 +761,72 @@ async function acceptReferral({
   doctorId: string;
   doctorName: string;
 }) {
-  const supabase = getSupabaseAdmin();
+  const supabase =
+    getSupabaseAdmin();
 
-  const now = new Date().toISOString();
+  const now =
+    new Date()
+      .toISOString();
 
   /*
    * Primary update.
    *
-   * queue_status must still be "waiting".
-   * This helps prevent two clinicians from accepting
-   * the same request at the same time.
+   * The queue_status = waiting condition means
+   * an already accepted referral won't be reassigned.
    */
 
-  const completeResult = await supabase
-    .from(REFERRAL_TABLE)
-    .update({
-      queue_status: "accepted",
-      referral_status: "accepted",
+  const completeResult =
+    await supabase
+      .from(
+        REFERRAL_TABLE
+      )
+      .update({
+        queue_status:
+          "accepted",
 
-      assigned_doctor_id:
-        doctorId,
+        referral_status:
+          "accepted",
 
-      assigned_doctor_name:
-        doctorName || "Doctor",
+        assigned_doctor_id:
+          doctorId,
 
-      accepted_at:
-        now,
+        assigned_doctor_name:
+          doctorName ||
+          "Doctor",
 
-      updated_at:
-        now,
-    })
-    .eq("id", referralId)
-    .eq("payment_status", "paid")
-    .eq("queue_status", "waiting")
-    .select("*")
-    .maybeSingle();
+        accepted_at:
+          now,
+
+        updated_at:
+          now,
+      })
+      .eq(
+        "id",
+        referralId
+      )
+      .eq(
+        "payment_status",
+        "paid"
+      )
+      .eq(
+        "queue_status",
+        "waiting"
+      )
+      .select("*")
+      .maybeSingle();
 
   if (
     !completeResult.error &&
     completeResult.data
   ) {
     return normaliseReferral(
-      completeResult.data as RawReferral
+      completeResult.data
     );
   }
 
   /*
-   * If there was no matching row because another
-   * doctor already accepted it, don't run a fallback
-   * update that could overwrite the assignment.
+   * No error + no data normally means the referral
+   * is no longer waiting.
    */
 
   if (
@@ -637,36 +838,61 @@ async function acceptReferral({
 
   console.warn(
     "Complete accept update failed. Trying compatible fields:",
-    completeResult.error?.message
+    completeResult.error
+      ?.message
   );
 
   /*
-   * Compatibility fallback for an older schema.
+   * Compatibility fallback for older SymptomAI
+   * database schemas.
    */
 
-  const fallbackResult = await supabase
-    .from(REFERRAL_TABLE)
-    .update({
-      queue_status: "accepted",
-      accepted_at: now,
-    })
-    .eq("id", referralId)
-    .eq("payment_status", "paid")
-    .eq("queue_status", "waiting")
-    .select("*")
-    .maybeSingle();
+  const fallbackResult =
+    await supabase
+      .from(
+        REFERRAL_TABLE
+      )
+      .update({
+        queue_status:
+          "accepted",
 
-  if (fallbackResult.error) {
+        accepted_at:
+          now,
+      })
+      .eq(
+        "id",
+        referralId
+      )
+      .eq(
+        "payment_status",
+        "paid"
+      )
+      .eq(
+        "queue_status",
+        "waiting"
+      )
+      .select("*")
+      .maybeSingle();
+
+  if (
+    fallbackResult.error
+  ) {
     throw new Error(
-      fallbackResult.error.message
+      fallbackResult
+        .error
+        .message
     );
   }
 
-  return fallbackResult.data
-    ? normaliseReferral(
-        fallbackResult.data as RawReferral
-      )
-    : null;
+  if (
+    !fallbackResult.data
+  ) {
+    return null;
+  }
+
+  return normaliseReferral(
+    fallbackResult.data
+  );
 }
 
 /* ============================================================
@@ -680,35 +906,59 @@ async function completeReferral({
   referralId: string;
   doctorId: string;
 }) {
-  const supabase = getSupabaseAdmin();
+  const supabase =
+    getSupabaseAdmin();
 
-  const now = new Date().toISOString();
+  const now =
+    new Date()
+      .toISOString();
 
   /*
-   * Only the clinician assigned to the referral
-   * should normally be able to complete it.
+   * Primary completion.
+   *
+   * Only the doctor assigned to the referral
+   * can complete it.
    */
 
-  const completeResult = await supabase
-    .from(REFERRAL_TABLE)
-    .update({
-      queue_status: "completed",
-      referral_status: "completed",
-      completed_at: now,
-      updated_at: now,
-    })
-    .eq("id", referralId)
-    .eq("assigned_doctor_id", doctorId)
-    .eq("queue_status", "accepted")
-    .select("*")
-    .maybeSingle();
+  const completeResult =
+    await supabase
+      .from(
+        REFERRAL_TABLE
+      )
+      .update({
+        queue_status:
+          "completed",
+
+        referral_status:
+          "completed",
+
+        completed_at:
+          now,
+
+        updated_at:
+          now,
+      })
+      .eq(
+        "id",
+        referralId
+      )
+      .eq(
+        "assigned_doctor_id",
+        doctorId
+      )
+      .eq(
+        "queue_status",
+        "accepted"
+      )
+      .select("*")
+      .maybeSingle();
 
   if (
     !completeResult.error &&
     completeResult.data
   ) {
     return normaliseReferral(
-      completeResult.data as RawReferral
+      completeResult.data
     );
   }
 
@@ -721,51 +971,66 @@ async function completeReferral({
 
   console.warn(
     "Complete referral update failed. Trying compatible fields:",
-    completeResult.error?.message
+    completeResult.error
+      ?.message
   );
 
   /*
-   * Compatibility fallback for an older schema.
+   * Compatibility fallback.
    */
 
-  const fallbackResult = await supabase
-    .from(REFERRAL_TABLE)
-    .update({
-      queue_status: "completed",
-      completed_at: now,
-    })
-    .eq("id", referralId)
-    .eq("queue_status", "accepted")
-    .select("*")
-    .maybeSingle();
+  const fallbackResult =
+    await supabase
+      .from(
+        REFERRAL_TABLE
+      )
+      .update({
+        queue_status:
+          "completed",
 
-  if (fallbackResult.error) {
+        completed_at:
+          now,
+      })
+      .eq(
+        "id",
+        referralId
+      )
+      .eq(
+        "queue_status",
+        "accepted"
+      )
+      .select("*")
+      .maybeSingle();
+
+  if (
+    fallbackResult.error
+  ) {
     throw new Error(
-      fallbackResult.error.message
+      fallbackResult
+        .error
+        .message
     );
   }
 
-  return fallbackResult.data
-    ? normaliseReferral(
-        fallbackResult.data as RawReferral
-      )
-    : null;
+  if (
+    !fallbackResult.data
+  ) {
+    return null;
+  }
+
+  return normaliseReferral(
+    fallbackResult.data
+  );
 }
 
 /* ============================================================
    GET
-   Load Virtual Consult Inbox
 ============================================================ */
 
 export async function GET() {
   try {
     const referrals =
       await loadPaidInboxReferrals();
-
-    /*
-     * Useful for confirming that both sources are
-     * reaching the CareScriber inbox.
-     */
 
     const sourceCounts =
       referrals.reduce(
@@ -778,11 +1043,17 @@ export async function GET() {
             "symptomai";
 
           accumulator[source] =
-            (accumulator[source] || 0) + 1;
+            (
+              accumulator[source] ||
+              0
+            ) + 1;
 
           return accumulator;
         },
-        {} as Record<string, number>
+        {} as Record<
+          string,
+          number
+        >
       );
 
     console.log(
@@ -814,8 +1085,9 @@ export async function GET() {
               hivTestResult:
                 referral.hiv_test_result,
 
-              requiresConfirmatoryTesting:
-                referral.requires_confirmatory_testing,
+              confirmatoryTesting:
+                referral
+                  .requires_confirmatory_testing,
             })
           ),
       }
@@ -823,7 +1095,8 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        success: true,
+        success:
+          true,
 
         count:
           referrals.length,
@@ -845,18 +1118,25 @@ export async function GET() {
 
         configured: {
           supabaseUrl:
-            Boolean(supabaseUrl),
+            Boolean(
+              supabaseUrl
+            ),
 
           serviceRoleKey:
-            Boolean(serviceRoleKey),
+            Boolean(
+              serviceRoleKey
+            ),
         },
       },
       {
         status: 200,
-        headers: noStoreHeaders(),
+        headers:
+          noStoreHeaders(),
       }
     );
-  } catch (error: unknown) {
+  } catch (
+    error: unknown
+  ) {
     const message =
       error instanceof Error
         ? error.message
@@ -869,14 +1149,22 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        success: false,
-        count: 0,
-        referrals: [],
-        error: message,
+        success:
+          false,
+
+        count:
+          0,
+
+        referrals:
+          [],
+
+        error:
+          message,
       },
       {
         status: 500,
-        headers: noStoreHeaders(),
+        headers:
+          noStoreHeaders(),
       }
     );
   }
@@ -884,14 +1172,14 @@ export async function GET() {
 
 /* ============================================================
    PATCH
-   Accept / Complete Referral
 ============================================================ */
 
 export async function PATCH(
   req: NextRequest
 ) {
   try {
-    let body: InboxActionBody;
+    let body:
+      InboxActionBody;
 
     try {
       body =
@@ -899,31 +1187,41 @@ export async function PATCH(
     } catch {
       return NextResponse.json(
         {
-          success: false,
+          success:
+            false,
+
           error:
             "A valid JSON request body is required.",
         },
         {
           status: 400,
-          headers: noStoreHeaders(),
+          headers:
+            noStoreHeaders(),
         }
       );
     }
 
     /* --------------------------------------------------------
-       Validate action
+       VALIDATE ACTION
     -------------------------------------------------------- */
 
-    if (!isValidAction(body.action)) {
+    if (
+      !isValidAction(
+        body.action
+      )
+    ) {
       return NextResponse.json(
         {
-          success: false,
+          success:
+            false,
+
           error:
             "Action must be either accept or complete.",
         },
         {
           status: 400,
-          headers: noStoreHeaders(),
+          headers:
+            noStoreHeaders(),
         }
       );
     }
@@ -944,40 +1242,47 @@ export async function PATCH(
       cleanString(
         body.doctorName,
         200
-      ) || "Doctor";
+      ) ||
+      "Doctor";
 
     /* --------------------------------------------------------
-       Validate referral
+       VALIDATE REFERRAL ID
     -------------------------------------------------------- */
 
     if (!referralId) {
       return NextResponse.json(
         {
-          success: false,
+          success:
+            false,
+
           error:
             "Referral ID is required.",
         },
         {
           status: 400,
-          headers: noStoreHeaders(),
+          headers:
+            noStoreHeaders(),
         }
       );
     }
 
     /* --------------------------------------------------------
-       Validate doctor
+       VALIDATE DOCTOR ID
     -------------------------------------------------------- */
 
     if (!doctorId) {
       return NextResponse.json(
         {
-          success: false,
+          success:
+            false,
+
           error:
             "Doctor ID is required.",
         },
         {
           status: 400,
-          headers: noStoreHeaders(),
+          headers:
+            noStoreHeaders(),
         }
       );
     }
@@ -986,7 +1291,10 @@ export async function PATCH(
        ACCEPT
     ======================================================== */
 
-    if (body.action === "accept") {
+    if (
+      body.action ===
+      "accept"
+    ) {
       const referral =
         await acceptReferral({
           referralId,
@@ -997,33 +1305,43 @@ export async function PATCH(
       if (!referral) {
         return NextResponse.json(
           {
-            success: false,
+            success:
+              false,
+
             error:
               "This request has already been accepted or is no longer waiting.",
           },
           {
             status: 409,
-            headers: noStoreHeaders(),
+            headers:
+              noStoreHeaders(),
           }
         );
       }
 
+      const acceptMessage =
+        referral.source ===
+        "navcare"
+          ? "NavCare clinical consultation accepted."
+          : "Virtual consultation request accepted.";
+
       return NextResponse.json(
         {
-          success: true,
+          success:
+            true,
 
-          action: "accept",
+          action:
+            "accept",
 
           referral,
 
           message:
-            referral.source === "navcare"
-              ? "NavCare clinical consultation accepted."
-              : "Virtual consultation request accepted.",
+            acceptMessage,
         },
         {
           status: 200,
-          headers: noStoreHeaders(),
+          headers:
+            noStoreHeaders(),
         }
       );
     }
@@ -1041,36 +1359,48 @@ export async function PATCH(
     if (!referral) {
       return NextResponse.json(
         {
-          success: false,
+          success:
+            false,
+
           error:
-            "The referral could not be completed. Confirm that this referral is assigned to the logged-in clinician.",
+            "The referral could not be completed. Confirm that it is accepted and assigned to this clinician.",
         },
         {
           status: 403,
-          headers: noStoreHeaders(),
+          headers:
+            noStoreHeaders(),
         }
       );
     }
 
+    const completeMessage =
+      referral.source ===
+      "navcare"
+        ? "NavCare clinical consultation marked as completed."
+        : "Referral marked as completed.";
+
     return NextResponse.json(
       {
-        success: true,
+        success:
+          true,
 
-        action: "complete",
+        action:
+          "complete",
 
         referral,
 
         message:
-          referral.source === "navcare"
-            ? "NavCare clinical consultation marked as completed."
-            : "Referral marked as completed.",
+          completeMessage,
       },
       {
         status: 200,
-        headers: noStoreHeaders(),
+        headers:
+          noStoreHeaders(),
       }
     );
-  } catch (error: unknown) {
+  } catch (
+    error: unknown
+  ) {
     const message =
       error instanceof Error
         ? error.message
@@ -1083,12 +1413,16 @@ export async function PATCH(
 
     return NextResponse.json(
       {
-        success: false,
-        error: message,
+        success:
+          false,
+
+        error:
+          message,
       },
       {
         status: 500,
-        headers: noStoreHeaders(),
+        headers:
+          noStoreHeaders(),
       }
     );
   }
