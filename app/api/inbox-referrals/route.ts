@@ -1112,8 +1112,93 @@ async function acceptReferral({
       : null;
   }
 
-  // HIVClinTest currently has the
-  // smaller referral schema we created.
+    // ======================================================
+  // HIVCLINTEST ACCEPT
+  // ======================================================
+
+  // First check whether another doctor has actually
+  // been assigned to this referral.
+  const currentReferral =
+    normaliseReferral(
+      found.record,
+      "hivclintest",
+    );
+
+  const alreadyAssigned =
+    Boolean(
+      currentReferral.assigned_doctor_id,
+    ) ||
+    Boolean(
+      currentReferral.assigned_doctor_name,
+    );
+
+  if (alreadyAssigned) {
+    // Allow the same doctor to reopen their accepted case.
+    if (
+      currentReferral.assigned_doctor_id ===
+      doctorId
+    ) {
+      return currentReferral;
+    }
+
+    return null;
+  }
+
+  const result =
+    await found.supabase
+      .from(
+        REFERRAL_TABLE,
+      )
+      .update({
+        queue_status:
+          "accepted",
+
+        referral_status:
+          "accepted",
+
+        assigned_doctor_id:
+          doctorId,
+
+        assigned_doctor_name:
+          doctorName || "Doctor",
+
+        accepted_at:
+          now,
+
+        updated_at:
+          now,
+      })
+      .eq(
+        "id",
+        referralId,
+      )
+      .eq(
+        "payment_status",
+        "paid",
+      )
+      .is(
+        "assigned_doctor_id",
+        null,
+      )
+      .select("*")
+      .maybeSingle();
+
+  if (result.error) {
+    throw new Error(
+      result.error.message,
+    );
+  }
+
+  if (!result.data) {
+    // Another doctor may have accepted the
+    // referral between our read and update.
+    return null;
+  }
+
+  return normaliseReferral(
+    result.data as RawReferral,
+    "hivclintest",
+  );
   const result =
     await found.supabase
       .from(
