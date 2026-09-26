@@ -1,69 +1,82 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+
+import {
+  createClient,
+  SupabaseClient,
+} from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type RecordData = Record<string, unknown>;
+type Data = Record<string, unknown>;
+type Source = "hivclintest" | "symptomai";
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function str(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim()
+    : "";
 }
 
-function normalizeReferralCode(value: unknown): string {
-  return stringValue(value).replace(/\s+/g, "").toUpperCase();
-}
-
-function normalizeConsentToken(value: unknown): string {
-  return stringValue(value).replace(/\s+/g, "");
-}
-
-function objectValue(value: unknown): RecordData {
-  if (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value)
-  ) {
-    return value as RecordData;
-  }
-
-  return {};
-}
-
-function firstValue(...values: unknown[]): string {
+function first(...values: unknown[]): string {
   for (const value of values) {
-    const result = stringValue(value);
+    const result = str(value);
     if (result) return result;
   }
   return "";
 }
 
-function getSupabase(
-  source: "hivclintest" | "symptomai"
-): SupabaseClient {
+function obj(value: unknown): Data {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    return value as Data;
+  }
+  return {};
+}
+
+function normalizeCode(value: unknown): string {
+  return str(value)
+    .replace(/\s+/g, "")
+    .toUpperCase();
+}
+
+function normalizeToken(value: unknown): string {
+  return str(value).replace(/\s+/g, "");
+}
+
+function isUUID(value: unknown): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    str(value)
+  );
+}
+
+function getSupabase(source: Source): SupabaseClient {
   const url =
     source === "hivclintest"
-      ? process.env.HIVCLINTEST_SUPABASE_URL?.trim()
-      : (
-          process.env.CARESCRIBER_SUPABASE_URL ||
-          process.env.NEXT_PUBLIC_SUPABASE_URL
-        )?.trim();
+      ? process.env.HIVCLINTEST_SUPABASE_URL
+      : process.env.CARESCRIBER_SUPABASE_URL ||
+        process.env.NEXT_PUBLIC_SUPABASE_URL;
 
   const key =
     source === "hivclintest"
-      ? process.env.HIVCLINTEST_SUPABASE_SERVICE_ROLE_KEY?.trim()
-      : (
-          process.env.CARESCRIBER_SUPABASE_SERVICE_ROLE_KEY ||
-          process.env.SUPABASE_SERVICE_ROLE_KEY
-        )?.trim();
+      ? process.env.HIVCLINTEST_SUPABASE_SERVICE_ROLE_KEY
+      : process.env
+          .CARESCRIBER_SUPABASE_SERVICE_ROLE_KEY ||
+        process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!url || !key) {
+  if (!url?.trim() || !key?.trim()) {
     throw new Error(
-      `${source} Supabase configuration is incomplete.`
+      `${source} Supabase configuration missing`
     );
   }
 
-  return createClient(url, key, {
+  return createClient(url.trim(), key.trim(), {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -71,14 +84,14 @@ function getSupabase(
   });
 }
 
-function jsonError(
-  message: string,
+function responseError(
+  error: string,
   status: number
 ) {
   return NextResponse.json(
     {
       success: false,
-      error: message,
+      error,
     },
     {
       status,
@@ -89,278 +102,274 @@ function jsonError(
   );
 }
 
-function getConsentStatus(
-  referral: RecordData
-): boolean | null {
-  if (referral.consent_given === true) {
-    return true;
-  }
-
-  if (referral.consent_given === false) {
-    return false;
-  }
-
-  return null;
-}
-
-function getReferralStatus(
-  referral: RecordData
-): string {
-  return firstValue(
+function referralStatus(referral: Data): string {
+  return first(
     referral.referral_status,
     referral.status,
     referral.queue_status
   ).toLowerCase();
 }
 
-function checkReferral(
-  referral: RecordData
-): { error: string; status: number } | null {
-  const consent = getConsentStatus(referral);
+async function findReferral(
+  db: SupabaseClient,
+  code: string,
+  token: string
+): Promise<Data | null> {
+  const { data, error } = await db
+    .from("symptomai_referrals")
+    .select("*")
+    .eq("referral_code", code)
+    .eq("consent_token", token)
+    .maybeSingle();
 
-  if (consent !== true) {
-    return {
-      error:
-        consent === false
-          ? "Patient consent has not been recorded."
-          : "Referral consent status is missing. Verify the original consent record before opening this referral.",
-      status: 403,
-    };
+  if (error) {
+    console.error(
+      "Referral query failed:",
+      error.code,
+      error.message
+    );
+
+    throw new Error("DATABASE_LOOKUP_FAILED");
   }
 
-  const expiresAt = firstValue(referral.expires_at);
+  return data ? obj(data) : null;
+}
 
-  if (expiresAt) {
-    const expiry = new Date(expiresAt).getTime();
-
-    if (
-      !Number.isNaN(expiry) &&
-      expiry <= Date.now()
-    ) {
-      return {
-        error: "This referral has expired.",
-        status: 410,
-      };
-    }
+async function findLinkedPatient(
+  db: SupabaseClient,
+  referral: Data
+): Promise<Data> {
+  if (!isUUID(referral.patient_id)) {
+    return {};
   }
 
-  const status = getReferralStatus(referral);
+  const { data, error } = await db
+    .from("patients")
+    .select("*")
+    .eq("id", str(referral.patient_id))
+    .maybeSingle();
 
-  if (
-    ["completed", "cancelled", "expired"].includes(
-      status
-    )
-  ) {
-    return {
-      error: `This referral is already ${status}.`,
-      status: 409,
-    };
+  if (error) {
+    console.error(
+      "Optional patient lookup:",
+      error.code,
+      error.message
+    );
+    return {};
   }
 
-  return null;
+  return obj(data);
 }
 
 function normalizePatient(
-  referral: RecordData,
-  patient: RecordData
+  source: Source,
+  referral: Data,
+  linked: Data
 ) {
-  const snapshot = objectValue(
+  const snapshot = obj(
     referral.patient_snapshot
   );
 
-  return {
-    id:
-      patient.id ||
-      referral.patient_id ||
-      snapshot.id ||
-      null,
+  // HIVClinTest stores patient information
+  // directly in its referral table.
+  const direct =
+    source === "hivclintest"
+      ? referral
+      : {};
 
-    first_name: firstValue(
-      patient.first_name,
+  const identity = first(
+    linked.patient_id,
+    linked.identity_number,
+    linked.id_number,
+    linked.national_id,
+    direct.identity_number,
+    direct.patient_id,
+    snapshot.identity_number,
+    snapshot.patient_id,
+    snapshot.patientId,
+    snapshot.id_number
+  );
+
+  // The internal patient UUID is separate
+  // from a national ID or passport number.
+  const internalId = first(
+    linked.id,
+    isUUID(referral.patient_id)
+      ? referral.patient_id
+      : "",
+    isUUID(snapshot.id)
+      ? snapshot.id
+      : ""
+  );
+
+  return {
+    id: internalId || null,
+
+    first_name: first(
+      linked.first_name,
+      direct.first_name,
       snapshot.first_name,
       snapshot.firstName
     ),
 
-    surname: firstValue(
-      patient.surname,
-      patient.last_name,
+    surname: first(
+      linked.surname,
+      linked.last_name,
+      direct.surname,
+      direct.last_name,
       snapshot.surname,
       snapshot.last_name,
       snapshot.lastName
     ),
 
-    patient_id: firstValue(
-      patient.patient_id,
-      patient.id_number,
-      patient.national_id,
-      snapshot.patient_id,
-      snapshot.patientId,
-      snapshot.identity_number,
-      snapshot.id_number
-    ),
+    patient_id: identity,
 
-    date_of_birth: firstValue(
-      patient.date_of_birth,
-      patient.dob,
+    identity_number: identity,
+
+    date_of_birth: first(
+      linked.date_of_birth,
+      linked.dob,
+      direct.date_of_birth,
+      direct.dob,
       snapshot.date_of_birth,
       snapshot.dateOfBirth,
       snapshot.dob
     ),
 
-    gender: firstValue(
-      patient.gender,
+    gender: first(
+      linked.gender,
+      direct.gender,
       snapshot.gender
     ),
 
-    mobile: firstValue(
-      patient.mobile,
-      patient.mobile_number,
+    mobile: first(
+      linked.mobile,
+      linked.mobile_number,
+      direct.mobile,
+      direct.mobile_number,
       snapshot.mobile,
       snapshot.mobile_number,
       snapshot.phone
     ),
 
-    email: firstValue(
-      patient.email,
+    email: first(
+      linked.email,
+      direct.email,
       snapshot.email
     ),
   };
 }
 
-async function findReferral(
-  supabase: SupabaseClient,
-  referralCode: string,
-  consentToken: string
-): Promise<RecordData | null> {
-  // Retrieve the row using both credentials.
-  // Do not reveal whether an individual code exists.
-  const { data, error } = await supabase
-    .from("symptomai_referrals")
-    .select("*")
-    .eq("referral_code", referralCode)
-    .eq("consent_token", consentToken)
-    .maybeSingle();
-
-  if (error) {
-    console.error(
-      "Referral database lookup failed:",
-      error.code,
-      error.message
-    );
-
-    throw new Error(
-      "Unable to retrieve referral from the database."
-    );
-  }
-
-  return data as RecordData | null;
-}
-
-async function findPatient(
-  supabase: SupabaseClient,
-  referral: RecordData
-): Promise<RecordData> {
-  const patientId = referral.patient_id;
-
-  if (!patientId) {
-    return {};
-  }
-
-  // Patient identifiers may differ between projects.
-  // Do not assume an ID number is a database UUID.
-  const id = String(patientId);
-
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      id
-    )
-  ) {
-    return {};
-  }
-
-  const { data, error } = await supabase
-    .from("patients")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (error) {
-    console.error(
-      "Patient lookup:",
-      error.code,
-      error.message
-    );
-    return {};
-  }
-
-  return objectValue(data);
-}
-
-export async function POST(
-  req: NextRequest
-) {
+export async function POST(req: NextRequest) {
   try {
+    /*
+     * SECURITY:
+     * This route handles confidential medical
+     * information and uses service-role access.
+     *
+     * Before production, enforce authenticated
+     * clinician authorisation and rate limiting
+     * using your existing CareScriber system.
+     *
+     * A referral code and consent token alone
+     * are not sufficient clinician authorisation.
+     */
+
     const body = await req.json();
 
-    const referralCode = normalizeReferralCode(
-      body?.referralCode || body?.referral_code
+    const code = normalizeCode(
+      body?.referralCode ??
+        body?.referral_code
     );
 
-    const consentToken = normalizeConsentToken(
-      body?.consentToken || body?.consent_token
+    const token = normalizeToken(
+      body?.consentToken ??
+        body?.consent_token
     );
 
     if (
-      !referralCode ||
-      !/^\d{6}$/.test(consentToken)
+      !code ||
+      !/^[0-9]{6}$/.test(token)
     ) {
-      return jsonError(
+      return responseError(
         "A referral code and valid six-digit consent token are required.",
         400
       );
     }
 
-    // HCT referrals belong to HIVClinTest.
-    // All other referrals retain the existing
-    // CareScriber / SymptomAI connection.
-    const source =
-      referralCode.startsWith("HCT-")
+    const source: Source =
+      code.startsWith("HCT-")
         ? "hivclintest"
         : "symptomai";
 
-    const supabase = getSupabase(source);
+    const db = getSupabase(source);
 
     const referral = await findReferral(
-      supabase,
-      referralCode,
-      consentToken
+      db,
+      code,
+      token
     );
 
     if (!referral) {
-      return jsonError(
+      return responseError(
         "Referral not found or consent token incorrect.",
         404
       );
     }
 
-    const validation = checkReferral(referral);
-
-    if (validation) {
-      return jsonError(
-        validation.error,
-        validation.status
+    if (referral.consent_given !== true) {
+      return responseError(
+        "Patient consent has not been recorded.",
+        403
       );
     }
 
-    const patientRecord = await findPatient(
-      supabase,
+    const expiry = first(
+      referral.expires_at
+    );
+
+    if (expiry) {
+      const timestamp = Date.parse(expiry);
+
+      if (
+        !Number.isNaN(timestamp) &&
+        timestamp <= Date.now()
+      ) {
+        return responseError(
+          "This referral has expired.",
+          410
+        );
+      }
+    }
+
+    const status = referralStatus(referral);
+
+    if (
+      [
+        "completed",
+        "cancelled",
+        "expired",
+      ].includes(status)
+    ) {
+      return responseError(
+        `This referral is already ${status}.`,
+        409
+      );
+    }
+
+    const linked = await findLinkedPatient(
+      db,
       referral
     );
 
     const patient = normalizePatient(
+      source,
       referral,
-      patientRecord
+      linked
     );
+
+    const triage =
+      referral.triage_snapshot ?? null;
 
     return NextResponse.json(
       {
@@ -368,32 +377,51 @@ export async function POST(
         source,
 
         referral: {
-          id: referral.id || null,
+          id: referral.id ?? null,
+
           patient_id:
-            referral.patient_id || null,
+            referral.patient_id ?? null,
+
           referral_code:
             referral.referral_code,
+
           consent_given: true,
-          status:
-            getReferralStatus(referral),
+
+          status,
+
+          referral_status:
+            referral.referral_status ??
+            status,
+
+          queue_status:
+            referral.queue_status ?? null,
+
+          payment_status:
+            referral.payment_status ?? null,
+
           submitted_at:
-            referral.submitted_at || null,
+            referral.submitted_at ?? null,
+
           expires_at:
-            referral.expires_at || null,
-          patient_snapshot:
-            referral.patient_snapshot || null,
-          triage_snapshot:
-            referral.triage_snapshot || null,
+            referral.expires_at ?? null,
+
           created_at:
-            referral.created_at || null,
+            referral.created_at ?? null,
+
+          patient_snapshot:
+            referral.patient_snapshot ??
+            (source === "hivclintest"
+              ? patient
+              : null),
+
+          triage_snapshot: triage,
         },
 
         patient,
-
-        triage:
-          referral.triage_snapshot || null,
+        triage,
       },
       {
+        status: 200,
         headers: {
           "Cache-Control": "no-store",
         },
@@ -401,14 +429,14 @@ export async function POST(
     );
   } catch (error: unknown) {
     console.error(
-      "Referral lookup failed:",
+      "Referral lookup error:",
       error instanceof Error
         ? error.message
         : "Unknown error"
     );
 
-    return jsonError(
-      "Referral lookup could not be completed. Check the server configuration and logs.",
+    return responseError(
+      "Referral lookup could not be completed.",
       500
     );
   }
