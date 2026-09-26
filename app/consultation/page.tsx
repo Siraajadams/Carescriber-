@@ -1,188 +1,122 @@
+
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabase";
 
 type Patient = {
-  id: string;
+  id: string | null;
   first_name: string;
   surname: string;
-  last_name?: string;
-  id_number?: string;
   patient_id?: string;
-  national_id?: string;
-  age?: number | null;
-  date_of_birth?: string | null;
-  dob?: string | null;
+  date_of_birth?: string;
   gender?: string;
   mobile?: string;
-  phone?: string;
   email?: string;
-  medical_aid?: string;
-  allergies?: string;
-  current_medicines?: string;
 };
 
-type Consultation = {
+type Referral = {
   id: string;
-  created_at?: string;
+  referral_code: string;
+  status?: string;
+  submitted_at?: string;
+};
+
+type RecentConsultation = {
+  id: string;
   patient_summary?: string;
   transcript?: string;
   soap_note?: string;
+  created_at?: string;
 };
-
-type SymptomReferral = {
-  id: string;
-  patient_id?: string;
-  referral_code?: string;
-  consent_token?: string;
-  consent_given?: boolean;
-  status?: string;
-  expires_at?: string | null;
-  submitted_at?: string | null;
-  viewed_at?: string | null;
-  triage_summary?: string | null;
-  urgency_level?: string | null;
-  recommendation?: string | null;
-  patient_snapshot?: any;
-  triage_snapshot?: any;
-};
-
-declare global {
-  interface Window {
-    webkitSpeechRecognition?: any;
-    SpeechRecognition?: any;
-  }
-}
-
-function normaliseId(value: string) {
-  return value.trim().replace(/\s+/g, "").toUpperCase();
-}
-
-function patientSurname(patient: Patient) {
-  return patient.surname || patient.last_name || "";
-}
-
-function patientIdValue(patient: Patient) {
-  return patient.patient_id || patient.id_number || patient.national_id || "";
-}
-
-function patientDob(patient: Patient) {
-  return patient.date_of_birth || patient.dob || "";
-}
-
-function patientMobile(patient: Patient) {
-  return patient.mobile || patient.phone || "";
-}
-
-function whatsappNumber(value: string) {
-  const digits = value.replace(/\D/g, "");
-
-  // South African local mobile/landline format: 0XXXXXXXXX -> 27XXXXXXXXX
-  if (digits.startsWith("0") && digits.length >= 10) {
-    return `27${digits.slice(1)}`;
-  }
-
-  // Already includes South Africa country code.
-  if (digits.startsWith("27")) {
-    return digits;
-  }
-
-  return digits;
-}
-
-function displayMobile(value: string) {
-  return value.trim() || "No mobile number captured";
-}
-
-function calculateAge(dob?: string | null, fallback?: number | null) {
-  if (fallback) return String(fallback);
-  if (!dob) return "Not captured";
-
-  const birth = new Date(dob);
-  if (Number.isNaN(birth.getTime())) return "Not captured";
-
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  const monthDiff = today.getMonth() - birth.getMonth();
-
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
-    age--;
-  }
-
-  return String(age);
-}
 
 function mapPatient(p: any): Patient {
   return {
-    id: p.id,
-    first_name: p.first_name || p.name || "",
+    id: p.id || null,
+    first_name: p.first_name || "",
     surname: p.surname || p.last_name || "",
-    last_name: p.last_name || p.surname || "",
-    id_number: p.id_number || p.patient_id || p.national_id || "",
-    patient_id: p.patient_id || p.id_number || p.national_id || "",
-    national_id: p.national_id || p.patient_id || p.id_number || "",
-    age: p.age || null,
-    date_of_birth: p.date_of_birth || p.dob || null,
-    dob: p.dob || p.date_of_birth || null,
+    patient_id:
+      p.patient_id ||
+      p.identity_number ||
+      p.id_number ||
+      p.national_id ||
+      "",
+    date_of_birth:
+      p.date_of_birth || p.dob || "",
     gender: p.gender || "",
-    mobile: p.mobile || p.phone || p.mobile_number || "",
-    phone: p.phone || p.mobile || p.mobile_number || "",
+    mobile:
+      p.mobile || p.mobile_number || p.phone || "",
     email: p.email || "",
-    medical_aid: p.medical_aid || "",
-    allergies: p.allergies || "No known allergies",
-    current_medicines: p.current_medicines || "",
   };
 }
 
-export default function ConsultationPage() {
-  const recognitionRef = useRef<any>(null);
-  const keepRecordingRef = useRef(false);
-  const finalTranscriptRef = useRef("");
+function isUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "An unexpected error occurred.";
+}
+
+export default function ConsultationPage() {
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [recent, setRecent] = useState<Consultation[]>([]);
+  const [selectedPatient, setSelectedPatient] =
+    useState<Patient | null>(null);
 
   const [search, setSearch] = useState("");
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [consent, setConsent] = useState(false);
-
   const [referralCode, setReferralCode] = useState("");
   const [consentToken, setConsentToken] = useState("");
-  const [referralLoading, setReferralLoading] = useState(false);
-  const [referral, setReferral] = useState<SymptomReferral | null>(null);
-  const [referralNote, setReferralNote] = useState("");
+  const [referral, setReferral] =
+    useState<Referral | null>(null);
+
+  const [referralSource, setReferralSource] =
+    useState("");
+  const [triage, setTriage] = useState<any>(null);
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [consent, setConsent] = useState(false);
 
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [soapNote, setSoapNote] = useState("");
-  const [message, setMessage] = useState("");
 
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [photoNote, setPhotoNote] = useState("");
-  const [imageAnalysis, setImageAnalysis] = useState("");
-  const [analyzingImage, setAnalyzingImage] = useState(false);
+  const [photoFile, setPhotoFile] =
+    useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] =
+    useState("");
+  const [imageAnalysis, setImageAnalysis] =
+    useState("");
+  const [analyzing, setAnalyzing] = useState(false);
 
-  const isInAppBrowser =
-    typeof navigator !== "undefined" &&
-    /WhatsApp|FBAN|FBAV|Instagram/i.test(navigator.userAgent);
+  const [recent, setRecent] =
+    useState<RecentConsultation[]>([]);
+
+  const recognitionRef = useRef<any>(null);
+  const keepRecordingRef = useRef(false);
+  const transcriptRef = useRef("");
+  const initializedRef = useRef(false);
 
   useEffect(() => {
     void loadPatients();
     void loadRecent();
-    void initialiseConsultationFromUrl();
-  }, []);
 
-  async function initialiseConsultationFromUrl() {
-    if (typeof window === "undefined") return;
+    if (initializedRef.current) return;
+    initializedRef.current = true;
 
-    const params = new URLSearchParams(window.location.search);
-
-    const patientId =
-      params.get("patient") ||
-      params.get("patientId");
+    const params = new URLSearchParams(
+      window.location.search
+    );
 
     const code =
       params.get("referralCode") ||
@@ -194,45 +128,49 @@ export default function ConsultationPage() {
       params.get("token") ||
       "";
 
-    if (patientId) {
-      const { data, error } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", patientId)
-        .limit(1);
+    const patientId =
+      params.get("patientId") ||
+      params.get("patient") ||
+      "";
 
-      if (error) {
-        setMessage("Patient load error: " + error.message);
-      } else if (data && data.length > 0) {
-        selectPatient(mapPatient(data[0]));
-      }
-    }
+    if (code) setReferralCode(code.toUpperCase());
+    if (token) setConsentToken(token);
 
-    if (code) {
-      setReferralCode(code.toUpperCase());
-    }
+    // Remove sensitive credentials from browser history.
+    if (token || patientId) {
+      const safeUrl = new URL(window.location.href);
+      safeUrl.searchParams.delete("consentToken");
+      safeUrl.searchParams.delete("token");
+      safeUrl.searchParams.delete("patientId");
+      safeUrl.searchParams.delete("patient");
 
-    if (token) {
-      setConsentToken(token);
+      window.history.replaceState(
+        {},
+        "",
+        safeUrl.pathname + safeUrl.search
+      );
     }
 
     if (code && token) {
-      await unlockSymptomAIReferral(
-        code.toUpperCase(),
-        token,
-      );
+      void unlockReferral(code, token);
+    } else if (patientId && isUUID(patientId)) {
+      void loadPatientById(patientId);
     }
-  }
+
+    return () => {
+      keepRecordingRef.current = false;
+      recognitionRef.current?.stop();
+    };
+  }, []);
 
   async function loadPatients() {
     const { data, error } = await supabase
       .from("patients")
       .select("*")
-      .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) {
-      setMessage("Patient load error: " + error.message);
+      setMessage(error.message);
       return;
     }
 
@@ -242,829 +180,1099 @@ export default function ConsultationPage() {
   async function loadRecent() {
     const { data } = await supabase
       .from("consultations")
-      .select("*")
-      .order("created_at", { ascending: false })
+      .select(
+        "id,patient_summary,transcript,soap_note,created_at"
+      )
+      .order("created_at", {
+        ascending: false,
+      })
       .limit(5);
 
-    setRecent((data || []) as Consultation[]);
+    setRecent(data || []);
   }
 
-  const filteredPatients = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q || selectedPatient) return [];
-
-    return patients.filter((p) =>
-      [p.first_name, patientSurname(p), p.id_number, p.patient_id, p.national_id, p.mobile, p.phone]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [patients, search, selectedPatient]);
-
-  function selectPatient(p: Patient) {
-    setSelectedPatient(p);
-    setSearch(`${p.first_name} ${patientSurname(p)}`.trim());
-    setMessage("");
-
-    if (typeof window !== "undefined") {
-      window.sessionStorage.setItem(
-        "carescriber_selected_patient_id",
-        p.id,
-      );
-    }
-  }
-
-  async function searchCareScriberPatients() {
-    const term = search.trim();
-
-    if (!term) {
-      setMessage("Enter name, surname, National ID / Passport or mobile.");
-      return;
-    }
-
-    const clean = normaliseId(term);
+  async function loadPatientById(id: string) {
+    if (!isUUID(id)) return;
 
     const { data, error } = await supabase
       .from("patients")
       .select("*")
-      .or(
-        [
-          `first_name.ilike.%${term}%`,
-          `surname.ilike.%${term}%`,
-          `last_name.ilike.%${term}%`,
-          `patient_id.ilike.%${term}%`,
-          `id_number.ilike.%${term}%`,
-          `national_id.ilike.%${term}%`,
-          `mobile.ilike.%${term}%`,
-          `phone.ilike.%${term}%`,
-          `patient_id.ilike.%${clean}%`,
-          `id_number.ilike.%${clean}%`,
-          `national_id.ilike.%${clean}%`,
-        ].join(",")
-      )
-      .order("created_at", { ascending: false })
-      .limit(20);
+      .eq("id", id)
+      .maybeSingle();
 
     if (error) {
-      setMessage("Patient search failed: " + error.message);
+      setMessage(error.message);
       return;
     }
 
-    const mapped = (data || []).map(mapPatient);
-    setPatients(mapped);
-
-    if (mapped.length === 0) {
-      setMessage("No matching patient found. Register the patient first.");
-    } else if (mapped.length === 1) {
-      selectPatient(mapped[0]);
-    } else {
-      setSelectedPatient(null);
-      setMessage(`${mapped.length} possible patients found. Select the correct patient.`);
+    if (data) {
+      selectPatient(mapPatient(data));
     }
   }
 
-  async function unlockSymptomAIReferral(
-    referralCodeOverride?: string,
-    consentTokenOverride?: string,
-  ) {
-    setMessage("");
-    setReferralNote("");
-    setReferralLoading(true);
+  function selectPatient(patient: Patient) {
+    setSelectedPatient(patient);
 
+    setSearch(
+      `${patient.first_name} ${patient.surname}`
+    );
+
+    if (patient.id) {
+      sessionStorage.setItem(
+        "carescriber_selected_patient_id",
+        patient.id
+      );
+    }
+  }
+
+  async function findExistingPatient(
+    external: Patient
+  ): Promise<Patient | null> {
+    const identity = external.patient_id?.trim();
+
+    // Search locally loaded records first.
+    if (identity) {
+      const local = patients.find(
+        (p) => p.patient_id === identity
+      );
+
+      if (local) return local;
+    }
+
+    // Avoid assuming which optional identity
+    // columns exist in the patients table.
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .limit(500);
+
+    if (error) {
+      console.error(
+        "Patient matching failed:",
+        error.message
+      );
+      return null;
+    }
+
+    const matches = (data || [])
+      .map(mapPatient)
+      .filter((p) => {
+        if (!identity) return false;
+        return p.patient_id === identity;
+      });
+
+    // Never select an ambiguous patient.
+    return matches.length === 1
+      ? matches[0]
+      : null;
+  }
+
+  async function unlockReferral(
+    codeOverride?: string,
+    tokenOverride?: string
+  ) {
     const code = (
-      referralCodeOverride ??
-      referralCode
+      codeOverride || referralCode
     )
       .trim()
       .toUpperCase();
 
     const token = (
-      consentTokenOverride ??
-      consentToken
+      tokenOverride || consentToken
     ).trim();
 
-    if (code) {
-      setReferralCode(code);
-    }
-
-    if (token) {
-      setConsentToken(token);
-    }
-
-    if (!code || !token) {
-      setReferralLoading(false);
-      setReferralNote("Enter both the referral code and patient consent token.");
+    if (!code || !/^\d{6}$/.test(token)) {
+      setMessage(
+        "Enter a referral code and six-digit consent token."
+      );
       return;
     }
+
+    setLoading(true);
+    setMessage("");
+    setReferral(null);
+    setSelectedPatient(null);
+    setTriage(null);
+    setConsent(false);
 
     try {
-      const lookupRes = await fetch("/api/referral-lookup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ referralCode: code, consentToken: token }),
-      });
+      const { data: sessionData, error: authError } =
+        await supabase.auth.getSession();
 
-      const lookupData = await lookupRes.json().catch(() => ({}));
+      const accessToken =
+        sessionData.session?.access_token;
 
-      if (!lookupRes.ok) {
-        setReferralNote(
-          "Referral lookup failed: " +
-            (lookupData.error || "Could not unlock referral.")
+      if (authError || !accessToken) {
+        throw new Error(
+          "Please sign in to CareScriber before opening a referral."
         );
-        return;
       }
 
-      const referralFound = lookupData.referral as SymptomReferral;
-      setReferral(referralFound);
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      };
 
-      const openRes = await fetch("/api/referral-open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ referralId: referralFound.id }),
-      });
+      // Check the referral and recorded consent.
+      const lookupResponse = await fetch(
+        "/api/referral-lookup",
+        {
+          method: "POST",
+          headers,
+          cache: "no-store",
+          body: JSON.stringify({
+            referralCode: code,
+            consentToken: token,
+          }),
+        }
+      );
 
-      const openData = await openRes.json().catch(() => ({}));
+      const lookupData =
+        await lookupResponse.json();
 
-      if (!openRes.ok) {
-        setReferralNote(
-          "Referral opened, but patient load failed: " +
-            (openData.error || "Could not load patient.")
+      if (!lookupResponse.ok) {
+        throw new Error(
+          lookupData.error ||
+            "Referral lookup failed."
         );
-        return;
       }
 
-      if (openData.patient) {
-        selectPatient(mapPatient(openData.patient));
+      const referralId =
+        lookupData.referral?.id;
+
+      if (!referralId) {
+        throw new Error(
+          "Referral database ID is missing."
+        );
       }
 
-      const triageText = openData.triage
-        ? `SYMPTOMAI TRIAGE DETAILS:\n${JSON.stringify(openData.triage, null, 2)}`
-        : referralFound.triage_snapshot
-          ? `SYMPTOMAI TRIAGE DETAILS:\n${JSON.stringify(referralFound.triage_snapshot, null, 2)}`
-          : "";
+      // Open using the same code and token.
+      // The previous page sent only referralId,
+      // which caused the integration failure.
+      const openResponse = await fetch(
+        "/api/referral-open",
+        {
+          method: "POST",
+          headers,
+          cache: "no-store",
+          body: JSON.stringify({
+            referralId,
+            referralCode: code,
+            consentToken: token,
+          }),
+        }
+      );
 
-      if (triageText) {
-        setTranscript((prev) => `${triageText}\n\n${prev}`.trim());
+      const openData =
+        await openResponse.json();
+
+      if (!openResponse.ok) {
+        throw new Error(
+          openData.error ||
+            "Unable to open referral."
+        );
       }
 
-      setConsent(true);
-      setReferralNote("Referral unlocked. Patient profile and SymptomAI triage are loaded.");
-    } catch (err: any) {
-      setReferralNote("Referral lookup failed: " + (err.message || "Unknown error"));
+      if (!openData.success) {
+        throw new Error(
+          "Referral opening was unsuccessful."
+        );
+      }
+
+      const openedReferral =
+        openData.referral as Referral;
+
+      const source =
+        openData.source || lookupData.source;
+
+      setReferral(openedReferral);
+      setReferralSource(source || "");
+
+      const clinicalTriage =
+        openData.triage ||
+        lookupData.triage ||
+        null;
+
+      setTriage(clinicalTriage);
+
+      if (clinicalTriage) {
+        const heading =
+          source === "hivclintest"
+            ? "HIVCLINTEST ASSESSMENT"
+            : "SYMPTOMAI ASSESSMENT";
+
+        const text =
+          `${heading}\n` +
+          JSON.stringify(
+            clinicalTriage,
+            null,
+            2
+          );
+
+        setTranscript(text);
+        transcriptRef.current = text;
+      }
+
+      const externalPatient =
+        mapPatient(
+          openData.patient ||
+            lookupData.patient ||
+            {}
+        );
+
+      const existing =
+        await findExistingPatient(
+          externalPatient
+        );
+
+      if (existing?.id) {
+        selectPatient(existing);
+
+        setMessage(
+          "Referral opened. Existing CareScriber patient loaded. Confirm AI documentation consent before recording."
+        );
+      } else {
+        // Display external demographics without
+        // pretending they are a CareScriber row.
+        setSelectedPatient(externalPatient);
+
+        setSearch(
+          `${externalPatient.first_name} ${externalPatient.surname}`
+        );
+
+        setMessage(
+          "Referral opened. Patient details retrieved, but no unique CareScriber patient record was matched. Verify and register or link the patient before saving."
+        );
+      }
+    } catch (error) {
+      setMessage(errorMessage(error));
     } finally {
-      setReferralLoading(false);
+      setLoading(false);
     }
   }
 
+  async function searchPatients() {
+    const term = search
+      .trim()
+      .toLowerCase();
 
-  function openWhatsAppCall() {
-    if (!selectedPatient) {
-      setMessage("Please select a patient first.");
-      return;
-    }
+    if (!term) return;
 
-    const mobile = patientMobile(selectedPatient);
-    const number = whatsappNumber(mobile);
-
-    if (!number) {
-      setMessage("No mobile number is captured for this patient.");
-      return;
-    }
-
-    setMessage(
-      "WhatsApp opened for the selected patient. Tap the phone icon in WhatsApp to start the voice call."
-    );
-
-    window.open(
-      `https://wa.me/${encodeURIComponent(number)}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
-  }
-
-  function openWhatsAppMessage() {
-    if (!selectedPatient) {
-      setMessage("Please select a patient first.");
-      return;
-    }
-
-    const mobile = patientMobile(selectedPatient);
-    const number = whatsappNumber(mobile);
-
-    if (!number) {
-      setMessage("No mobile number is captured for this patient.");
-      return;
-    }
-
-    const patientName = selectedPatient.first_name || "there";
-    const body = `Hi ${patientName}, this is your doctor contacting you from CareScriber regarding your consultation.`;
-
-    window.open(
-      `https://wa.me/${encodeURIComponent(number)}?text=${encodeURIComponent(body)}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
-  }
-
-  function callPatientNormally() {
-    if (!selectedPatient) {
-      setMessage("Please select a patient first.");
-      return;
-    }
-
-    const mobile = patientMobile(selectedPatient).replace(/\s+/g, "");
-
-    if (!mobile) {
-      setMessage("No mobile number is captured for this patient.");
-      return;
-    }
-
-    window.location.href = `tel:${mobile}`;
-  }
-
-  function newConsultation() {
-    stopRecording();
     setSelectedPatient(null);
-    setSearch("");
-    setConsent(false);
-    setReferralCode("");
-    setConsentToken("");
-    setReferral(null);
-    setReferralNote("");
-    setTranscript("");
-    setSoapNote("");
-    setPhotoPreview(null);
-    setPhotoFile(null);
-    setPhotoNote("");
-    setImageAnalysis("");
-    setMessage("");
 
-    if (typeof window !== "undefined") {
-      window.sessionStorage.removeItem(
-        "carescriber_selected_patient_id",
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .limit(500);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    const matches = (data || [])
+      .map(mapPatient)
+      .filter((p) =>
+        [
+          p.first_name,
+          p.surname,
+          p.patient_id,
+          p.mobile,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(term)
+      );
+
+    setPatients(matches);
+
+    if (matches.length === 1) {
+      selectPatient(matches[0]);
+    } else {
+      setMessage(
+        `${matches.length} matching patient(s).`
       );
     }
-
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function startRecording() {
-    setMessage("");
-
-    if (isInAppBrowser) {
-      setMessage("Open in Safari or Chrome. WhatsApp browser may block microphone access.");
-    }
-
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setMessage("Speech recognition is not supported on this browser. Use Chrome or Safari.");
-      return;
-    }
-
-    keepRecordingRef.current = true;
-    finalTranscriptRef.current = transcript.trim();
-
-    const startSession = () => {
-      if (!keepRecordingRef.current) return;
-
-      try {
-        const recognition = new SpeechRecognition();
-        recognitionRef.current = recognition;
-
-        recognition.lang = "en-ZA";
-        recognition.continuous = true;
-        recognition.interimResults = true;
-
-        recognition.onstart = () => {
-          setRecording(true);
-          setMessage("Recording started. Speak clearly.");
-        };
-
-        recognition.onresult = (event: any) => {
-          let interim = "";
-
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const text = event.results[i][0].transcript.trim();
-
-            if (event.results[i].isFinal) {
-              const current = finalTranscriptRef.current.toLowerCase();
-              const incoming = text.toLowerCase();
-
-              if (text && !current.endsWith(incoming)) {
-                finalTranscriptRef.current = `${finalTranscriptRef.current} ${text}`.trim();
-              }
-            } else {
-              interim = `${interim} ${text}`.trim();
-            }
-          }
-
-          setTranscript(`${finalTranscriptRef.current} ${interim}`.trim());
-        };
-
-        recognition.onerror = (event: any) => {
-          if (event.error === "not-allowed") {
-            keepRecordingRef.current = false;
-            setRecording(false);
-            setMessage("Microphone permission denied. Allow microphone access in browser settings.");
-          } else {
-            setMessage("Recording issue: " + event.error);
-          }
-        };
-
-        recognition.onend = () => {
-          if (keepRecordingRef.current) {
-            setTimeout(startSession, 700);
-          } else {
-            setRecording(false);
-          }
-        };
-
-        recognition.start();
-      } catch {
-        setMessage("Could not start microphone. Refresh page and try again.");
-        setRecording(false);
-      }
-    };
-
-    startSession();
-  }
-
-  function stopRecording() {
-    keepRecordingRef.current = false;
-    try {
-      recognitionRef.current?.stop();
-    } catch {}
-    setRecording(false);
-  }
-
-  function handlePhoto(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setPhotoFile(file);
-    setPhotoPreview(URL.createObjectURL(file));
-    setPhotoNote("Image captured. Click AI Analyze Image to review.");
-    setImageAnalysis("");
-  }
-
-  async function analyzeImage() {
-    if (!photoFile) {
-      setMessage("Please capture or upload an image first.");
-      return;
-    }
-
-    setAnalyzingImage(true);
-    setMessage("");
-
-    const formData = new FormData();
-    formData.append("image", photoFile);
-
-    try {
-      const res = await fetch("/api/analyze-clinical-image", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setMessage(data.error || "Image analysis failed.");
-        return;
-      }
-
-      setImageAnalysis(data.analysis);
-      setTranscript((prev) =>
-        `${prev}\n\nCLINICAL IMAGE ANALYSIS:\n${data.analysis}`.trim()
+    if (!selectedPatient?.id) {
+      setMessage(
+        "Link the patient to CareScriber first."
       );
-      setPhotoNote("AI image analysis completed. Clinician must verify findings.");
-    } catch {
-      setMessage("Could not analyze image. Check API route.");
-    } finally {
-      setAnalyzingImage(false);
-    }
-  }
-
-  async function generateSoap() {
-    if (!selectedPatient) {
-      setMessage("Please select a patient first.");
       return;
     }
 
     if (!consent) {
-      setMessage("Please confirm AI consent first.");
+      setMessage(
+        "Confirm AI documentation consent first."
+      );
       return;
     }
 
-    const referralText = referral
-      ? `
-SYMPTOMAI REFERRAL
-Referral code: ${referral.referral_code || "Not captured"}
-Submitted: ${referral.submitted_at || "Not captured"}
-Urgency: ${referral.urgency_level || "Not captured"}
-Recommendation: ${referral.recommendation || "Not captured"}
-Summary: ${referral.triage_summary || "Not captured"}
-`
-      : "";
+    const browser = window as any;
 
-    const generated = `
-PATIENT SUMMARY
-Name: ${selectedPatient.first_name} ${patientSurname(selectedPatient)}
-ID Number: ${patientIdValue(selectedPatient) || "Not captured"}
-Age: ${calculateAge(patientDob(selectedPatient), selectedPatient.age)}
-DOB: ${patientDob(selectedPatient) || "Not captured"}
-Gender: ${selectedPatient.gender || "Not captured"}
-Mobile: ${patientMobile(selectedPatient) || "Not captured"}
-Email: ${selectedPatient.email || "Not captured"}
-Medical Aid: ${selectedPatient.medical_aid || "Not captured"}
-Allergies: ${selectedPatient.allergies || "No known allergies"}
-Current Medicines: ${selectedPatient.current_medicines || "Not captured"}
+    const Recognition =
+      browser.SpeechRecognition ||
+      browser.webkitSpeechRecognition;
 
-${referralText}
+    if (!Recognition) {
+      setMessage(
+        "Speech recognition is unavailable. Use a supported browser or enter notes manually."
+      );
+      return;
+    }
 
-CONSENT
-Patient consented to AI-assisted clinical documentation.
+    keepRecordingRef.current = true;
+    transcriptRef.current = transcript;
 
-TRANSCRIPT / CLINICAL NOTES
-${transcript || "No transcript captured."}
+    const begin = () => {
+      if (!keepRecordingRef.current) return;
 
-IMAGE ANALYSIS
-${imageAnalysis || "No clinical image analysis captured."}
+      const recognition = new Recognition();
+      recognitionRef.current = recognition;
 
-SOAP NOTE
+      recognition.lang = "en-ZA";
+      recognition.continuous = true;
+      recognition.interimResults = true;
 
-Subjective:
-- ${transcript || "Patient history to be completed by clinician."}
+      recognition.onstart = () =>
+        setRecording(true);
 
-Objective:
-- Examination findings to be completed by clinician.
-- Vitals to be added if available.
-${imageAnalysis ? "- Clinical image AI analysis reviewed. Clinician must verify findings." : ""}
+      recognition.onresult = (event: any) => {
+        let interim = "";
 
-Assessment:
-- Clinical impression pending clinician confirmation.
-- Differential diagnosis to be confirmed by clinician.
+        for (
+          let i = event.resultIndex;
+          i < event.results.length;
+          i++
+        ) {
+          const result = event.results[i];
+          const words =
+            result[0].transcript;
 
-Plan:
-- Review SymptomAI triage findings and confirm the diagnosis clinically.
-- Perform focused clinical examination based on the presenting symptoms.
-- Check vital signs if clinically indicated: BP, pulse, temperature, respiratory rate and oxygen saturation.
-- Assess severity, duration, red flags, pregnancy status, allergies, current medicines and comorbid risk factors.
-- Provide treatment according to the confirmed diagnosis, local prescribing rules, SA STG/EML principles and pharmacist/doctor scope of practice.
-- If symptoms are worsening, prolonged, recurrent, severe, or associated with red flags, escalate to GP / emergency care.
-- Provide safety-net advice: return urgently if chest pain, shortness of breath, severe headache, persistent fever, confusion, dehydration, bleeding, neurological symptoms, visual disturbance, severe abdominal pain, or worsening symptoms occur.
-- Counsel the patient on medicine use, dosing, side effects, adherence, expected response and when to seek urgent help.
-- Follow up within 24–72 hours depending on severity and clinical judgement.
-- Consider prescription, sick note, referral letter, pathology, or further investigation only after clinician confirmation.
+          if (result.isFinal) {
+            transcriptRef.current +=
+              ` ${words}`;
+          } else {
+            interim += ` ${words}`;
+          }
+        }
 
-ICD-10 SUGGESTIONS
-- R51 - Headache, if headache symptoms are present.
-- G43.9 - Migraine, unspecified, if migraine is clinically confirmed.
-- K30 - Functional dyspepsia, if gastric / indigestion symptoms are present.
-- M54.9 - Dorsalgia, unspecified, if backache is present.
-- R50.9 - Fever, unspecified, if fever is present.
-- R10.4 - Other and unspecified abdominal pain, if stomach cramps / abdominal pain are present.
-- N39.0 - Urinary tract infection, site not specified, if UTI symptoms are clinically confirmed.
-- J00 - Acute nasopharyngitis / common cold, if cold and flu symptoms are present.
-- H10.9 - Conjunctivitis, unspecified, if red eye / eye infection symptoms are clinically confirmed.
-- H92.0 - Otalgia, if earache is present.
-- K08.8 - Other specified disorders of teeth and supporting structures, if dental pain is present.
-- L50.9 - Urticaria, unspecified, if allergic rash / hives are present.
-- Z71.9 - Counselling, unspecified, if only advice or reassurance is provided.
+        setTranscript(
+          (
+            transcriptRef.current +
+            interim
+          ).trim()
+        );
+      };
 
-Clinical note:
-- ICD-10 codes are suggestions only. The clinician must confirm the final diagnosis, treatment plan and ICD-10 code before issuing any prescription, referral or sick note.
+      recognition.onerror = (event: any) => {
+        if (event.error === "not-allowed") {
+          keepRecordingRef.current = false;
+          setMessage(
+            "Microphone permission denied."
+          );
+        }
+      };
 
-REFERRAL / PRESCRIPTION
-- Draft only. Clinician must verify before issuing.
-`;
+      recognition.onend = () => {
+        setRecording(false);
 
-    setSoapNote(generated);
+        if (keepRecordingRef.current) {
+          begin();
+        }
+      };
 
-    const { error } = await supabase.from("consultations").insert({
-      patient_id: selectedPatient.id,
-      patient_summary: `${selectedPatient.first_name} ${patientSurname(selectedPatient)}`,
-      transcript,
-      soap_note: generated,
-      consent_confirmed: consent,
-      referral_id: referral?.id || null,
-    });
+      recognition.start();
+    };
 
-    if (error) {
-      const { error: fallbackError } = await supabase.from("consultations").insert({
-        patient_id: selectedPatient.id,
-        patient_summary: `${selectedPatient.first_name} ${patientSurname(selectedPatient)}`,
-        transcript,
-        soap_note: generated,
-        consent_confirmed: consent,
-      });
+    begin();
+  }
 
-      if (fallbackError) {
-        setMessage("SOAP generated, but save failed: " + fallbackError.message);
-      } else {
-        setMessage("SOAP note generated and saved.");
-        loadRecent();
+  function stopRecording() {
+    keepRecordingRef.current = false;
+    recognitionRef.current?.stop();
+    setRecording(false);
+  }
+
+  function handlePhoto(
+    event: ChangeEvent<HTMLInputElement>
+  ) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    setPhotoFile(file);
+    setPhotoPreview(
+      URL.createObjectURL(file)
+    );
+    setImageAnalysis("");
+  }
+
+  async function analyzeImage() {
+    if (!photoFile) return;
+
+    if (!consent) {
+      setMessage(
+        "Confirm AI documentation consent first."
+      );
+      return;
+    }
+
+    setAnalyzing(true);
+
+    try {
+      const form = new FormData();
+      form.append("image", photoFile);
+
+      const response = await fetch(
+        "/api/analyze-clinical-image",
+        {
+          method: "POST",
+          body: form,
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            "Image analysis failed."
+        );
       }
-    } else {
-      setMessage("SOAP note generated and saved.");
-      loadRecent();
+
+      setImageAnalysis(
+        data.analysis || ""
+      );
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setAnalyzing(false);
     }
   }
 
-  function exportPdf() {
-    window.print();
+  async function generateSoap() {
+    if (!selectedPatient?.id) {
+      setMessage(
+        "A verified CareScriber patient record is required before saving."
+      );
+      return;
+    }
+
+    if (!consent) {
+      setMessage(
+        "Confirm AI documentation consent."
+      );
+      return;
+    }
+
+    const note = `
+PATIENT
+Name: ${selectedPatient.first_name} ${selectedPatient.surname}
+Identity: ${selectedPatient.patient_id || "Not recorded"}
+DOB: ${selectedPatient.date_of_birth || "Not recorded"}
+Gender: ${selectedPatient.gender || "Not recorded"}
+
+REFERRAL
+Source: ${referralSource || "Direct consultation"}
+Code: ${referral?.referral_code || "None"}
+
+ASSESSMENT INFORMATION
+${triage ? JSON.stringify(triage, null, 2) : "Not provided"}
+
+CLINICAL TRANSCRIPT
+${transcript || "Not recorded"}
+
+CLINICAL IMAGE ANALYSIS
+${imageAnalysis || "Not provided"}
+
+SOAP NOTE - CLINICIAN DRAFT
+
+Subjective:
+${transcript || "Complete clinical history."}
+
+Objective:
+Enter examination findings and observations.
+
+Assessment:
+Clinician to document and confirm diagnosis.
+
+Plan:
+Clinician to document treatment, investigations,
+referrals, safety-netting and follow-up.
+
+All clinical findings, diagnoses and treatment
+decisions require clinician verification.
+`.trim();
+
+    setSoapNote(note);
+
+    const payload = {
+      patient_id: selectedPatient.id,
+      patient_summary:
+        `${selectedPatient.first_name} ${selectedPatient.surname}`,
+      transcript,
+      soap_note: note,
+      consent_confirmed: true,
+    };
+
+    const { error } = await supabase
+      .from("consultations")
+      .insert(payload);
+
+    if (error) {
+      setMessage(
+        "SOAP generated but saving failed: " +
+          error.message
+      );
+      return;
+    }
+
+    setMessage(
+      "SOAP draft generated and saved."
+    );
+
+    void loadRecent();
   }
 
+  function contactPatient(
+    mode: "whatsapp" | "phone"
+  ) {
+    const mobile =
+      selectedPatient?.mobile || "";
+
+    if (!mobile) {
+      setMessage(
+        "No patient mobile number available."
+      );
+      return;
+    }
+
+    if (mode === "phone") {
+      window.location.href =
+        `tel:${mobile}`;
+      return;
+    }
+
+    const digits =
+      mobile.replace(/\D/g, "");
+
+    const number =
+      digits.startsWith("0")
+        ? "27" + digits.slice(1)
+        : digits;
+
+    window.open(
+      `https://wa.me/${number}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }
+
+  function newConsultation() {
+    stopRecording();
+
+    setSelectedPatient(null);
+    setReferral(null);
+    setReferralCode("");
+    setConsentToken("");
+    setReferralSource("");
+    setTriage(null);
+    setConsent(false);
+    setTranscript("");
+    setSoapNote("");
+    setSearch("");
+    setPhotoFile(null);
+    setPhotoPreview("");
+    setImageAnalysis("");
+    setMessage("");
+
+    sessionStorage.removeItem(
+      "carescriber_selected_patient_id"
+    );
+
+    void loadPatients();
+  }
+
+  const button: React.CSSProperties = {
+    padding: 15,
+    border: 0,
+    borderRadius: 12,
+    background: "#2563eb",
+    color: "white",
+    fontWeight: 700,
+    cursor: "pointer",
+  };
+
+  const input: React.CSSProperties = {
+    width: "100%",
+    padding: 14,
+    borderRadius: 12,
+    border: "1px solid #cbd5e1",
+    boxSizing: "border-box",
+    fontSize: 16,
+  };
+
   return (
-    <main style={styles.page}>
-      <section style={styles.card}>
-        <Link href="/dashboard" style={styles.back}>← Back to Dashboard</Link>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#eef4fb",
+        padding: 20,
+        color: "#0f172a",
+      }}
+    >
+      <section
+        style={{
+          maxWidth: 850,
+          margin: "auto",
+          background: "white",
+          padding: 25,
+          borderRadius: 20,
+        }}
+      >
+        <Link href="/dashboard">
+          Back to Dashboard
+        </Link>
 
-        <p style={styles.kicker}>Videomed Clinical Assistant</p>
-        <h1 style={styles.title}>CareScriber Consultation</h1>
-        <p style={styles.subtitle}>
-          Search patient, unlock SymptomAI referrals, confirm consent, record, edit transcript, analyze images, generate SOAP and export PDF.
-        </p>
+        <h1>CareScriber Consultation</h1>
 
-        <div style={styles.tabRow}>
-          <Link href="/dashboard" style={styles.tab}>Dashboard</Link>
-          <Link href="/inbox" style={styles.tab}>Virtual Consult Inbox</Link>
-          <Link href="/patients" style={styles.tab}>Patients</Link>
-          <Link href="/consultation" style={styles.activeTab}>Consultation</Link>
-          <Link href="/sick-note" style={styles.sickTab}>Sick Note</Link>
-          <Link href="/e-script" style={styles.escriptTab}>eScript</Link>
-          <Link
-            href={
-              selectedPatient
-                ? `/referral?patientId=${encodeURIComponent(selectedPatient.id)}`
-                : "/referral"
-            }
-            style={styles.referralTab}
-          >
-            Referral
-          </Link>
-        </div>
+        <nav
+          style={{
+            display: "flex",
+            gap: 15,
+            flexWrap: "wrap",
+          }}
+        >
+          <Link href="/dashboard">Dashboard</Link>
+          <Link href="/inbox">Virtual Consult Inbox</Link>
+          <Link href="/patients">Patients</Link>
+          <Link href="/consultation">Consultation</Link>
+          <Link href="/sick-note">Sick Note</Link>
+          <Link href="/e-script">eScript</Link>
+        </nav>
 
-        {isInAppBrowser && (
-          <div style={styles.warning}>
-            Open in Safari or Chrome for microphone recording. WhatsApp browser may block recording.
-          </div>
-        )}
-
-        <button style={styles.lightButton} onClick={newConsultation}>
-          + New Consultation
-        </button>
-
-        <hr style={styles.divider} />
-
-        <h2 style={styles.heading}>Unlock SymptomAI Referral</h2>
-        <p style={styles.muted}>
-          Enter the patient referral code and consent token generated on SymptomAI.
-        </p>
-
-        <div style={styles.twoCol}>
-          <input
-            style={styles.input}
-            value={referralCode}
-            placeholder="Referral code e.g. CS-ABC123"
-            onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
-          />
-
-          <input
-            style={styles.input}
-            value={consentToken}
-            placeholder="Patient consent token"
-            onChange={(e) => setConsentToken(e.target.value)}
-          />
-        </div>
+        <hr />
 
         <button
-          style={styles.primaryButton}
-          onClick={() => void unlockSymptomAIReferral()}
-          disabled={referralLoading}
+          style={button}
+          onClick={newConsultation}
         >
-          {referralLoading ? "Unlocking Referral..." : "Unlock Referral"}
+          New Consultation
         </button>
 
-        {referralNote && <div style={styles.message}>{referralNote}</div>}
+        <h2>Unlock Referral</h2>
+
+        <p>
+          Supports HIVClinTest and SymptomAI.
+        </p>
+
+        <input
+          style={input}
+          placeholder="Referral code"
+          value={referralCode}
+          onChange={(e) =>
+            setReferralCode(
+              e.target.value.toUpperCase()
+            )
+          }
+        />
+
+        <br /><br />
+
+        <input
+          style={input}
+          type="password"
+          autoComplete="off"
+          placeholder="Six-digit consent token"
+          value={consentToken}
+          onChange={(e) =>
+            setConsentToken(e.target.value)
+          }
+        />
+
+        <br /><br />
+
+        <button
+          style={button}
+          disabled={loading}
+          onClick={() =>
+            void unlockReferral()
+          }
+        >
+          {loading
+            ? "Opening Referral..."
+            : "Unlock Referral"}
+        </button>
 
         {referral && (
-          <div style={styles.selected}>
-            SymptomAI referral unlocked: {referral.referral_code} · Status:{" "}
-            {referral.status || "Ready for consultation"}
-          </div>
-        )}
-
-        <hr style={styles.divider} />
-
-        <h2 style={styles.heading}>Find Patient</h2>
-
-        <div style={styles.searchRow}>
-          <input
-            style={styles.input}
-            value={search}
-            placeholder="Search surname, first name, National ID / Passport or mobile"
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setSelectedPatient(null);
+          <div
+            style={{
+              marginTop: 15,
+              padding: 15,
+              background: "#dcfce7",
+              borderRadius: 12,
             }}
-          />
+          >
+            <strong>
+              Referral opened successfully
+            </strong>
 
-          <button style={styles.smallButton} onClick={searchCareScriberPatients}>
-            Search Patient
-          </button>
-        </div>
+            <p>
+              {referral.referral_code}
+            </p>
 
-        {search && !selectedPatient && filteredPatients.length === 0 && (
-          <p style={styles.muted}>No matching patient found.</p>
-        )}
+            <p>
+              Source: {referralSource}
+            </p>
 
-        {filteredPatients.map((p) => (
-          <button key={p.id} style={styles.patientCard} onClick={() => selectPatient(p)}>
-            <strong>{p.first_name} {patientSurname(p)}</strong>
-            <span>
-              ID: {patientIdValue(p) || "N/A"} · Age: {calculateAge(patientDob(p), p.age)} · {p.gender || "N/A"} · {patientMobile(p) || "No mobile"}
-            </span>
-          </button>
-        ))}
-
-        {selectedPatient && (
-          <div style={styles.selected}>
-            Selected: {selectedPatient.first_name} {patientSurname(selectedPatient)} · ID:{" "}
-            {patientIdValue(selectedPatient) || "Not captured"} · DOB:{" "}
-            {patientDob(selectedPatient) || "Not captured"}
-          </div>
-        )}
-
-
-        {selectedPatient && (
-          <div style={styles.contactCard}>
-            <div style={styles.contactHeader}>
-              <div>
-                <p style={styles.contactKicker}>Patient Contact</p>
-                <h3 style={styles.contactTitle}>
-                  {selectedPatient.first_name} {patientSurname(selectedPatient)}
-                </h3>
-                <p style={styles.contactNumber}>
-                  {displayMobile(patientMobile(selectedPatient))}
-                </p>
-              </div>
-
-              <div style={styles.contactStatus}>
-                <span style={styles.contactDot} />
-                Ready to contact
-              </div>
-            </div>
-
-            <div style={styles.contactGrid}>
-              <button
-                type="button"
-                style={styles.whatsappCallButton}
-                onClick={openWhatsAppCall}
-              >
-                📞 WhatsApp Call Patient
-              </button>
-
-              <button
-                type="button"
-                style={styles.whatsappMessageButton}
-                onClick={openWhatsAppMessage}
-              >
-                💬 WhatsApp Message
-              </button>
-
-              <button
-                type="button"
-                style={styles.normalCallButton}
-                onClick={callPatientNormally}
-              >
-                ☎ Normal Phone Call
-              </button>
-            </div>
-
-            <p style={styles.contactHelp}>
-              WhatsApp opens the patient conversation. Tap the phone icon inside
-              WhatsApp to start the voice call. The doctor’s personal number is
-              only avoided when CareScriber is connected to a WhatsApp Business
-              calling service.
+            <p>
+              Status: {referral.status}
             </p>
           </div>
         )}
 
-        {selectedPatient && (
-          <div style={styles.actionGrid}>
-            <Link
-              href={`/sick-note?patientId=${encodeURIComponent(selectedPatient.id)}`}
-              style={styles.sickNoteButton}
-            >
-              Create Sick Note for Selected Patient
-            </Link>
-
-            <Link
-              href={`/e-script?patientId=${encodeURIComponent(selectedPatient.id)}`}
-              style={styles.escriptButton}
-            >
-              Create eScript for Selected Patient
-            </Link>
-
-            <Link
-              href={`/referral?patientId=${encodeURIComponent(selectedPatient.id)}`}
-              style={styles.referralButton}
-            >
-              Create Referral for Selected Patient
-            </Link>
+        {message && (
+          <div
+            role="status"
+            style={{
+              marginTop: 15,
+              padding: 15,
+              background: "#dbeafe",
+              borderRadius: 12,
+            }}
+          >
+            {message}
           </div>
         )}
 
-        <hr style={styles.divider} />
+        <hr />
 
-        <h2 style={styles.heading}>AI Consent</h2>
+        <h2>Find Patient</h2>
 
-        <label style={styles.checkRow}>
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-          <span>I have the patient’s consent to use CareScriber AI.</span>
-        </label>
+        <input
+          style={input}
+          placeholder="Search name or identity number"
+          value={search}
+          onChange={(e) =>
+            setSearch(e.target.value)
+          }
+        />
 
-        <hr style={styles.divider} />
+        <br /><br />
 
-        <h2 style={styles.heading}>Recording</h2>
-
-        <button style={{ ...styles.startButton, opacity: recording ? 0.5 : 1 }} disabled={recording} onClick={startRecording}>
-          🎙 Start Recording
+        <button
+          style={button}
+          onClick={() =>
+            void searchPatients()
+          }
+        >
+          Search Patient
         </button>
 
-        <button style={{ ...styles.stopButton, opacity: !recording ? 0.5 : 1 }} disabled={!recording} onClick={stopRecording}>
-          ⏹ Stop Recording
+        {patients
+          .filter((p) =>
+            search &&
+            !selectedPatient &&
+            [
+              p.first_name,
+              p.surname,
+              p.patient_id,
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(
+                search.toLowerCase()
+              )
+          )
+          .map((p) => (
+            <button
+              key={p.id}
+              onClick={() =>
+                selectPatient(p)
+              }
+              style={{
+                ...input,
+                marginTop: 10,
+                textAlign: "left",
+                background: "#f8fafc",
+                cursor: "pointer",
+              }}
+            >
+              {p.first_name} {p.surname}
+              <br />
+              {p.patient_id}
+            </button>
+          ))}
+
+        {selectedPatient && (
+          <div
+            style={{
+              background: "#f0fdf4",
+              padding: 20,
+              borderRadius: 15,
+              marginTop: 20,
+            }}
+          >
+            <h3>Selected Patient</h3>
+
+            <p>
+              {selectedPatient.first_name}{" "}
+              {selectedPatient.surname}
+            </p>
+
+            <p>
+              ID: {selectedPatient.patient_id}
+            </p>
+
+            <p>
+              DOB: {selectedPatient.date_of_birth}
+            </p>
+
+            {!selectedPatient.id && (
+              <p>
+                External referral patient.
+                Link or register in CareScriber
+                before saving.
+              </p>
+            )}
+
+            <button
+              style={button}
+              onClick={() =>
+                contactPatient("whatsapp")
+              }
+            >
+              WhatsApp Patient
+            </button>
+
+            {" "}
+
+            <button
+              style={button}
+              onClick={() =>
+                contactPatient("phone")
+              }
+            >
+              Call Patient
+            </button>
+
+            {selectedPatient.id && (
+              <div
+                style={{
+                  marginTop: 20,
+                  display: "flex",
+                  gap: 15,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Link
+                  href={`/sick-note?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                >
+                  Sick Note
+                </Link>
+
+                <Link
+                  href={`/e-script?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                >
+                  eScript
+                </Link>
+
+                <Link
+                  href={`/referral?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                >
+                  Referral
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
+
+        <hr />
+
+        <h2>AI Documentation Consent</h2>
+
+        <label>
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) =>
+              setConsent(e.target.checked)
+            }
+          />
+
+          I have verified the patient's consent
+          to AI-assisted clinical documentation.
+        </label>
+
+        <hr />
+
+        <h2>Recording</h2>
+
+        <button
+          style={{
+            ...button,
+            background: "#16a34a",
+          }}
+          disabled={recording}
+          onClick={startRecording}
+        >
+          Start Recording
         </button>
 
-        <hr style={styles.divider} />
+        {" "}
 
-        <h2 style={styles.heading}>Camera / Clinical Image</h2>
+        <button
+          style={{
+            ...button,
+            background: "#dc2626",
+          }}
+          disabled={!recording}
+          onClick={stopRecording}
+        >
+          Stop Recording
+        </button>
 
-        <label style={styles.cameraButton}>
-          📷 Capture or Upload Image
-          <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} style={{ display: "none" }} />
-        </label>
+        <hr />
+
+        <h2>Clinical Image</h2>
+
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handlePhoto}
+        />
 
         {photoPreview && (
           <>
-            <img src={photoPreview} alt="Clinical upload" style={styles.preview} />
-            <button onClick={analyzeImage} disabled={analyzingImage} style={styles.primaryButton}>
-              {analyzingImage ? "Analyzing Image..." : "AI Analyze Image"}
+            <img
+              src={photoPreview}
+              alt="Clinical image"
+              style={{
+                maxWidth: "100%",
+                marginTop: 15,
+              }}
+            />
+
+            <button
+              style={button}
+              disabled={analyzing}
+              onClick={() =>
+                void analyzeImage()
+              }
+            >
+              {analyzing
+                ? "Analyzing..."
+                : "AI Analyze Image"}
             </button>
           </>
         )}
 
-        {photoNote && <p style={styles.muted}>{photoNote}</p>}
-        {imageAnalysis && <pre style={styles.noteBox}>{imageAnalysis}</pre>}
+        {imageAnalysis && (
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {imageAnalysis}
+          </pre>
+        )}
 
-        <hr style={styles.divider} />
+        <hr />
 
-        <h2 style={styles.heading}>Editable Transcript / Clinical Notes</h2>
+        <h2>Transcript / Clinical Notes</h2>
 
         <textarea
-          style={styles.textarea}
+          style={{
+            ...input,
+            minHeight: 220,
+          }}
           value={transcript}
-          onChange={(e) => setTranscript(e.target.value)}
-          placeholder="Transcript will appear here. Clinician can edit before generating SOAP."
+          onChange={(e) => {
+            setTranscript(e.target.value);
+            transcriptRef.current =
+              e.target.value;
+          }}
         />
 
-        <button style={styles.primaryButton} onClick={generateSoap}>
+        <br /><br />
+
+        <button
+          style={button}
+          onClick={() =>
+            void generateSoap()
+          }
+        >
           Generate SOAP Note
         </button>
 
-        {message && <div style={styles.message}>{message}</div>}
-
         {soapNote && (
           <>
-            <button style={styles.pdfButton} onClick={exportPdf}>
+            <button
+              style={{
+                ...button,
+                marginTop: 15,
+                background: "#0f172a",
+              }}
+              onClick={() =>
+                window.print()
+              }
+            >
               Export / Print PDF
             </button>
-            <pre style={styles.noteBox}>{soapNote}</pre>
+
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                background: "#f8fafc",
+                padding: 20,
+                borderRadius: 12,
+              }}
+            >
+              {soapNote}
+            </pre>
           </>
         )}
 
-        <hr style={styles.divider} />
+        <hr />
 
-        <h2 style={styles.heading}>Recent Consultations</h2>
+        <h2>Recent Consultations</h2>
 
-        {recent.length === 0 && <p style={styles.muted}>No recent consultations yet.</p>}
+        {recent.map((item) => (
+          <div
+            key={item.id}
+            style={{
+              border: "1px solid #cbd5e1",
+              padding: 15,
+              borderRadius: 12,
+              marginBottom: 10,
+            }}
+          >
+            <strong>
+              {item.patient_summary ||
+                "Consultation"}
+            </strong>
 
-        {recent.map((c) => (
-          <div key={c.id} style={styles.recentCard}>
-            <strong>{c.patient_summary || "Consultation"}</strong>
-            <small>{c.created_at ? new Date(c.created_at).toLocaleString() : ""}</small>
+            <br />
+
             <button
-              style={styles.smallButton}
+              style={{
+                ...button,
+                marginTop: 10,
+              }}
               onClick={() => {
-                setTranscript(c.transcript || "");
-                setSoapNote(c.soap_note || "");
-                setMessage("Recent consultation loaded.");
-                window.scrollTo({ top: 0, behavior: "smooth" });
+                setTranscript(
+                  item.transcript || ""
+                );
+                setSoapNote(
+                  item.soap_note || ""
+                );
               }}
             >
-              Open
+              View Notes
             </button>
           </div>
         ))}
@@ -1072,56 +1280,3 @@ REFERRAL / PRESCRIPTION
     </main>
   );
 }
-
-const styles: Record<string, CSSProperties> = {
-  page: { minHeight: "100vh", background: "#eef4fb", padding: "18px", fontFamily: "Arial, Helvetica, sans-serif", color: "#0f172a" },
-  card: { maxWidth: 760, margin: "0 auto", background: "#ffffff", borderRadius: 28, padding: 28, boxShadow: "0 20px 60px rgba(15, 23, 42, 0.10)" },
-  back: { color: "#2563eb", fontWeight: 800, textDecoration: "none", fontSize: 18 },
-  kicker: { marginTop: 30, color: "#2563eb", fontWeight: 900, fontSize: 18 },
-  title: { fontSize: 48, lineHeight: 1, margin: "12px 0", fontWeight: 900 },
-  subtitle: { fontSize: 22, color: "#526174", lineHeight: 1.45 },
-  tabRow: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 },
-  tab: { padding: "12px 14px", borderRadius: 14, background: "#e2e8f0", color: "#0f172a", textDecoration: "none", fontWeight: 900 },
-  activeTab: { padding: "12px 14px", borderRadius: 14, background: "#2563eb", color: "#fff", textDecoration: "none", fontWeight: 900 },
-  sickTab: { padding: "12px 14px", borderRadius: 14, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900 },
-  escriptTab: { padding: "12px 14px", borderRadius: 14, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900 },
-  referralTab: { padding: "12px 14px", borderRadius: 14, background: "#7c3aed", color: "#fff", textDecoration: "none", fontWeight: 900 },
-  warning: { background: "#fff7ed", color: "#9a3412", padding: 16, borderRadius: 16, fontWeight: 800, marginTop: 18 },
-  divider: { border: 0, borderTop: "1px solid #e2e8f0", margin: "32px 0" },
-  heading: { fontSize: 34, fontWeight: 900, marginBottom: 18 },
-  input: { width: "100%", boxSizing: "border-box", border: "2px solid #cbd5e1", borderRadius: 20, padding: 18, fontSize: 20 },
-  twoCol: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 },
-  searchRow: { display: "grid", gridTemplateColumns: "1fr", gap: 12 },
-  muted: { color: "#64748b", fontSize: 18 },
-  patientCard: { width: "100%", textAlign: "left", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, marginTop: 12, display: "grid", gap: 6, fontSize: 18 },
-  selected: { marginTop: 16, background: "#dcfce7", color: "#166534", padding: 16, borderRadius: 16, fontWeight: 900, fontSize: 17 },
-  actionGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 },
-  contactCard: { marginTop: 18, padding: 18, borderRadius: 20, background: "#f0fdf4", border: "1px solid #bbf7d0" },
-  contactHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" },
-  contactKicker: { margin: 0, color: "#15803d", fontWeight: 900, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.7 },
-  contactTitle: { margin: "6px 0 4px", fontSize: 24, fontWeight: 900, color: "#14532d" },
-  contactNumber: { margin: 0, fontSize: 18, fontWeight: 800, color: "#166534" },
-  contactStatus: { display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 999, background: "#dcfce7", color: "#166534", fontWeight: 900, fontSize: 13 },
-  contactDot: { width: 9, height: 9, borderRadius: 999, background: "#22c55e", display: "inline-block" },
-  contactGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 16 },
-  whatsappCallButton: { border: 0, borderRadius: 16, padding: 17, background: "#22c55e", color: "#052e16", fontWeight: 900, fontSize: 16, cursor: "pointer" },
-  whatsappMessageButton: { border: 0, borderRadius: 16, padding: 17, background: "#dcfce7", color: "#166534", fontWeight: 900, fontSize: 16, cursor: "pointer" },
-  normalCallButton: { border: 0, borderRadius: 16, padding: 17, background: "#0f172a", color: "#ffffff", fontWeight: 900, fontSize: 16, cursor: "pointer" },
-  contactHelp: { margin: "14px 0 0", color: "#475569", fontSize: 14, lineHeight: 1.5 },
-  sickNoteButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#f97316", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
-  escriptButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#16a34a", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
-  referralButton: { display: "block", textAlign: "center", padding: 18, borderRadius: 18, background: "#7c3aed", color: "#fff", textDecoration: "none", fontWeight: 900, fontSize: 18 },
-  checkRow: { display: "flex", gap: 14, alignItems: "flex-start", fontSize: 20, lineHeight: 1.4 },
-  startButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#16a34a", color: "#fff", fontSize: 22, fontWeight: 900, marginBottom: 14 },
-  stopButton: { width: "100%", border: 0, borderRadius: 22, padding: 22, background: "#dc2626", color: "#fff", fontSize: 22, fontWeight: 900 },
-  cameraButton: { display: "block", width: "100%", boxSizing: "border-box", textAlign: "center", borderRadius: 20, padding: 20, background: "#dbeafe", color: "#1d4ed8", fontWeight: 900, fontSize: 20 },
-  preview: { width: "100%", borderRadius: 18, marginTop: 16, border: "1px solid #cbd5e1" },
-  textarea: { width: "100%", boxSizing: "border-box", minHeight: 210, border: "2px solid #cbd5e1", borderRadius: 22, padding: 20, fontSize: 20, lineHeight: 1.5 },
-  primaryButton: { width: "100%", border: 0, borderRadius: 20, padding: 22, background: "#2563eb", color: "#fff", fontSize: 22, fontWeight: 900, marginTop: 16 },
-  lightButton: { width: "100%", border: 0, borderRadius: 20, padding: 20, background: "#dbeafe", color: "#1d4ed8", fontSize: 20, fontWeight: 900, marginTop: 16 },
-  pdfButton: { width: "100%", border: 0, borderRadius: 20, padding: 20, background: "#0f172a", color: "#fff", fontSize: 20, fontWeight: 900, marginTop: 18 },
-  smallButton: { border: 0, borderRadius: 14, padding: 14, background: "#0f172a", color: "#fff", fontWeight: 900, fontSize: 16 },
-  message: { background: "#e0f2fe", color: "#075985", padding: 14, borderRadius: 14, fontWeight: 800, marginTop: 16 },
-  noteBox: { whiteSpace: "pre-wrap", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 18, padding: 18, fontSize: 15, marginTop: 18, overflowX: "auto" },
-  recentCard: { border: "1px solid #cbd5e1", borderRadius: 18, padding: 16, marginBottom: 12, display: "grid", gap: 8 },
-};
