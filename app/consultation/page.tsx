@@ -296,8 +296,37 @@ export default function ConsultationPage() {
     setConsent(false);
 
     try {
-      const { data: sessionData, error: authError } =
-        await supabase.auth.getSession();
+      // Verify that CareScriber has a valid authenticated user.
+const {
+  data: userData,
+  error: userError,
+} = await supabase.auth.getUser();
+
+if (userError || !userData.user) {
+  throw new Error(
+    "Your CareScriber login could not be verified. Please sign out and sign in again."
+  );
+}
+
+// Obtain the access token for authenticated API requests.
+const {
+  data: sessionData,
+  error: sessionError,
+} = await supabase.auth.getSession();
+
+const accessToken =
+  sessionData.session?.access_token;
+
+if (sessionError || !accessToken) {
+  throw new Error(
+    "Your login session is unavailable. Please sign in again."
+  );
+}
+
+const headers = {
+  "Content-Type": "application/json",
+  Authorization: `Bearer ${accessToken}`,
+};
 
       const accessToken =
         sessionData.session?.access_token;
