@@ -558,6 +558,9 @@ function normaliseReferral(
 
   if (
     paymentStatus === "paid" &&
+    !["accepted", "completed"].includes(queueStatus || "") &&
+    !["accepted", "completed"].includes(stringValue(record.referral_status) || "") &&
+    !record.assigned_doctor_id &&
     (
       !queueStatus ||
       queueStatus === "pending" ||
@@ -908,6 +911,11 @@ async function loadPaidInboxReferrals():
   const referrals:
     InboxReferral[] = [];
 
+  if (results[0].status === "rejected" ||
+      (hivClinTest && results[1].status === "rejected")) {
+    throw new Error("One or more configured referral databases failed to load. Check server logs.");
+  }
+
   for (
     const result of results
   ) {
@@ -973,766 +981,127 @@ async function findReferralDatabase(
     },
   ];
 
-  if (requestedSource) {
-    sources.sort(
-      (a, b) =>
-        a.source ===
-        requestedSource
-          ? -1
-          : b.source ===
-              requestedSource
-            ? 1
-            : 0,
-    );
+  const candidates = requestedSource
+    ? sources.filter((item) => item.source === requestedSource)
+    : sources;
+  if (requestedSource && !candidates[0]?.client) {
+    throw new Error(`Database ${requestedSource} is not configured.`);
   }
 
-  for (
-    const item of sources
-  ) {
-    if (!item.client) {
-      continue;
+  const matches: Array<{
+    supabase: SupabaseClient;
+    source: DatabaseSource;
+    record: RawReferral;
+  }> = [];
+  for (const item of candidates) {
+    if (!item.client) continue;
+    const result = await item.client
+      .from(REFERRAL_TABLE)
+      .select("*")
+      .eq("id", referralId)
+      .maybeSingle();
+    if (result.error) {
+      throw new Error(`${item.source} referral lookup failed: ${result.error.message}`);
     }
-
-    const result =
-      await item.client
-        .from(
-          REFERRAL_TABLE,
-        )
-        .select("*")
-        .eq(
-          "id",
-          referralId,
-        )
-        .maybeSingle();
-
-    if (
-      !result.error &&
-      result.data
-    ) {
-      return {
-        supabase:
-          item.client,
-
-        source:
-          item.source,
-
-        record:
-          result.data as RawReferral,
-      };
+    if (result.data) {
+      matches.push({
+        supabase: item.client,
+        source: item.source,
+        record: result.data as RawReferral,
+      });
     }
   }
+  if (matches.length > 1) {
+    throw new Error("Referral ID exists in both databases. Send databaseSource with the request.");
+  }
+  if (matches.length === 1) return matches[0];
 
   return null;
 }
 
-// ======================================================
-// ACCEPT
-// ======================================================
-
-async function acceptReferral({
-  referralId,
-  doctorId,
-  doctorName,
-  databaseSource,
+// Atomic database functions are installed by the accompanying SQL migration.
+// Do not replace these with a read-then-update: that creates a race condition.
+async function changeReferral({
+  action, referralId, doctorId, doctorName, databaseSource,
 }: {
+  action: InboxAction;
   referralId: string;
   doctorId: string;
   doctorName: string;
-  databaseSource?:
-    DatabaseSource;
-}) {
+  databaseSource?: DatabaseSource;
+}): Promise<InboxReferral | null> {
+  const found = await findReferralDatabase(referralId, databaseSource);
+  if (!found) return null;
 
-  const found =
-    await findReferralDatabase(
-      referralId,
-      databaseSource,
-    );
-
-  if (!found) {
-    return null;
-  }
-
-  const now =
-    new Date()
-      .toISOString();
-
-  // Existing CareScriber database has
-  // the doctor-assignment columns.
-  if (
-    found.source ===
-    "carescriber"
-  ) {
-    const result =
-      await found.supabase
-        .from(
-          REFERRAL_TABLE,
-        )
-        .update({
-          queue_status:
-            "accepted",
-
-          referral_status:
-            "accepted",
-
-          assigned_doctor_id:
-            doctorId,
-
-          assigned_doctor_name:
-            doctorName ||
-            "Doctor",
-
-          accepted_at:
-            now,
-
-          updated_at:
-            now,
-        })
-        .eq(
-          "id",
-          referralId,
-        )
-        .eq(
-          "payment_status",
-          "paid",
-        )
-        .select("*")
-        .maybeSingle();
-
-    if (result.error) {
-      throw new Error(
-        result.error.message,
-      );
-    }
-
-    return result.data
-      ? normaliseReferral(
-          result.data as RawReferral,
-          "carescriber",
-        )
-      : null;
-  }
-
-    // ======================================================
-  // HIVCLINTEST ACCEPT
-  // ======================================================
-
-  // First check whether another doctor has actually
-  // been assigned to this referral.
-  const currentReferral =
-    normaliseReferral(
-      found.record,
-      "hivclintest",
-    );
-
-  const alreadyAssigned =
-    Boolean(
-      currentReferral.assigned_doctor_id,
-    ) ||
-    Boolean(
-      currentReferral.assigned_doctor_name,
-    );
-
-  if (alreadyAssigned) {
-    // Allow the same doctor to reopen their accepted case.
-    if (
-      currentReferral.assigned_doctor_id ===
-      doctorId
-    ) {
-      return currentReferral;
-    }
-
-    return null;
-  }
-
-  const result =
-    await found.supabase
-      .from(
-        REFERRAL_TABLE,
-      )
-      .update({
-        queue_status:
-          "accepted",
-
-        referral_status:
-          "accepted",
-
-        assigned_doctor_id:
-          doctorId,
-
-        assigned_doctor_name:
-          doctorName || "Doctor",
-
-        accepted_at:
-          now,
-
-        updated_at:
-          now,
-      })
-      .eq(
-        "id",
-        referralId,
-      )
-      .eq(
-        "payment_status",
-        "paid",
-      )
-      .is(
-        "assigned_doctor_id",
-        null,
-      )
-      .select("*")
-      .maybeSingle();
-
-  if (result.error) {
-    throw new Error(
-      result.error.message,
-    );
-  }
-
-  if (!result.data) {
-    // Another doctor may have accepted the
-    // referral between our read and update.
-    return null;
-  }
-
-  return normaliseReferral(
-    result.data as RawReferral,
-    "hivclintest",
-  );
-  const result =
-    await found.supabase
-      .from(
-        REFERRAL_TABLE,
-      )
-      .update({
-        queue_status:
-          "accepted",
-
-        referral_status:
-          "accepted",
-
-        updated_at:
-          now,
-      })
-      .eq(
-        "id",
-        referralId,
-      )
-      .eq(
-        "payment_status",
-        "paid",
-      )
-      .select("*")
-      .maybeSingle();
-
-  if (result.error) {
-    throw new Error(
-      result.error.message,
-    );
-  }
-
-  return result.data
-    ? normaliseReferral(
-        result.data as RawReferral,
-        "hivclintest",
-      )
-    : null;
+  const { data, error } = await found.supabase.rpc("carescriber_change_referral", {
+    p_referral_id: referralId,
+    p_action: action,
+    p_doctor_id: doctorId,
+    p_doctor_name: doctorName,
+  });
+  if (error) throw new Error(`${found.source} referral update failed: ${error.message}`);
+  if (!data) return null;
+  return normaliseReferral(data as RawReferral, found.source);
 }
-
-// ======================================================
-// COMPLETE
-// ======================================================
-
-async function completeReferral({
-  referralId,
-  doctorId,
-  databaseSource,
-}: {
-  referralId: string;
-  doctorId: string;
-  databaseSource?:
-    DatabaseSource;
-}) {
-
-  const found =
-    await findReferralDatabase(
-      referralId,
-      databaseSource,
-    );
-
-  if (!found) {
-    return null;
-  }
-
-  const now =
-    new Date()
-      .toISOString();
-
-  if (
-    found.source ===
-    "carescriber"
-  ) {
-    const result =
-      await found.supabase
-        .from(
-          REFERRAL_TABLE,
-        )
-        .update({
-          queue_status:
-            "completed",
-
-          referral_status:
-            "completed",
-
-          completed_at:
-            now,
-
-          updated_at:
-            now,
-        })
-        .eq(
-          "id",
-          referralId,
-        )
-        .eq(
-          "assigned_doctor_id",
-          doctorId,
-        )
-        .eq(
-          "queue_status",
-          "accepted",
-        )
-        .select("*")
-        .maybeSingle();
-
-    if (result.error) {
-      throw new Error(
-        result.error.message,
-      );
-    }
-
-    return result.data
-      ? normaliseReferral(
-          result.data as RawReferral,
-          "carescriber",
-        )
-      : null;
-  }
-
-  // HIVClinTest currently does not
-  // contain assigned_doctor_id or
-  // completed_at, so only update
-  // columns known to exist there.
-  const result =
-    await found.supabase
-      .from(
-        REFERRAL_TABLE,
-      )
-      .update({
-        queue_status:
-          "completed",
-
-        referral_status:
-          "completed",
-
-        updated_at:
-          now,
-      })
-      .eq(
-        "id",
-        referralId,
-      )
-      .eq(
-        "queue_status",
-        "accepted",
-      )
-      .select("*")
-      .maybeSingle();
-
-  if (result.error) {
-    throw new Error(
-      result.error.message,
-    );
-  }
-
-  return result.data
-    ? normaliseReferral(
-        result.data as RawReferral,
-        "hivclintest",
-      )
-    : null;
-}
-
-// ======================================================
-// GET
-// ======================================================
 
 export async function GET() {
   try {
-    const referrals =
-      await loadPaidInboxReferrals();
-
-    const sourceCounts =
-      referrals.reduce(
-        (
-          accumulator,
-          referral,
-        ) => {
-
-          const source =
-            referral.source ||
-            "symptomai";
-
-          accumulator[source] =
-            (
-              accumulator[source] ||
-              0
-            ) + 1;
-
-          return accumulator;
-        },
-        {} as Record<
-          string,
-          number
-        >,
-      );
-
-    console.log(
-      "CareScriber combined paid inbox:",
-      {
-        count:
-          referrals.length,
-
-        sourceCounts,
-
-        referrals:
-          referrals.map(
-            (referral) => ({
-              id:
-                referral.id,
-
-              referralCode:
-                referral.referral_code,
-
-              source:
-                referral.source,
-
-              database:
-                referral.database_source,
-
-              patient:
-                referral.patient_name,
-
-              paymentStatus:
-                referral.payment_status,
-
-              queueStatus:
-                referral.queue_status,
-            }),
-          ),
+    const referrals = await loadPaidInboxReferrals();
+    const sources = referrals.reduce((acc, r) => {
+      acc[r.source] = (acc[r.source] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    return NextResponse.json({
+      success: true, count: referrals.length, referrals, sources,
+      configured: {
+        carescriber: Boolean(careScriberUrl && careScriberServiceKey),
+        hivclintest: Boolean(hivClinTestUrl && hivClinTestServiceKey),
       },
-    );
-
-    return NextResponse.json(
-      {
-        success:
-          true,
-
-        count:
-          referrals.length,
-
-        referrals,
-
-        sources:
-          sourceCounts,
-
-        configured: {
-          carescriber:
-            Boolean(
-              careScriberUrl &&
-              careScriberServiceKey,
-            ),
-
-          hivclintest:
-            Boolean(
-              hivClinTestUrl &&
-              hivClinTestServiceKey,
-            ),
-        },
-      },
-      {
-        status: 200,
-        headers:
-          noStoreHeaders(),
-      },
-    );
-  } catch (
-    error: unknown
-  ) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Could not load the virtual consult inbox.";
-
-    console.error(
-      "Inbox API GET error:",
-      error,
-    );
-
-    return NextResponse.json(
-      {
-        success:
-          false,
-
-        count:
-          0,
-
-        referrals:
-          [],
-
-        error:
-          message,
-      },
-      {
-        status: 500,
-        headers:
-          noStoreHeaders(),
-      },
-    );
+    }, { headers: noStoreHeaders() });
+  } catch (error) {
+    console.error("Inbox GET error:", error);
+    return NextResponse.json({ success: false, referrals: [], count: 0,
+      error: error instanceof Error ? error.message : "Inbox load failed",
+    }, { status: 500, headers: noStoreHeaders() });
   }
 }
 
-// ======================================================
-// PATCH
-// ======================================================
-
-export async function PATCH(
-  req: NextRequest,
-) {
+export async function PATCH(req: NextRequest) {
   try {
-    let body:
-      InboxActionBody;
-
+    let body: InboxActionBody;
     try {
-      body =
-        (
-          await req.json()
-        ) as InboxActionBody;
+      body = await req.json() as InboxActionBody;
     } catch {
-      return NextResponse.json(
-        {
-          success:
-            false,
-
-          error:
-            "A valid JSON request body is required.",
-        },
-        {
-          status: 400,
-          headers:
-            noStoreHeaders(),
-        },
-      );
+      return NextResponse.json({ success: false, error: "Valid JSON required." }, { status: 400 });
     }
-
-    if (
-      !isValidAction(
-        body.action,
-      )
-    ) {
-      return NextResponse.json(
-        {
-          success:
-            false,
-
-          error:
-            "Action must be either accept or complete.",
-        },
-        {
-          status: 400,
-          headers:
-            noStoreHeaders(),
-        },
-      );
+    if (!isValidAction(body.action)) {
+      return NextResponse.json({ success: false, error: "Invalid action." }, { status: 400 });
     }
-
-    const referralId =
-      cleanString(
-        body.referralId,
-        100,
-      );
-
-    const doctorId =
-      cleanString(
-        body.doctorId,
-        100,
-      );
-
-    const doctorName =
-      cleanString(
-        body.doctorName,
-        200,
-      ) ||
-      "Doctor";
-
-    if (!referralId) {
-      return NextResponse.json(
-        {
-          success:
-            false,
-
-          error:
-            "Referral ID is required.",
-        },
-        {
-          status: 400,
-          headers:
-            noStoreHeaders(),
-        },
-      );
+    const referralId = cleanString(body.referralId, 100);
+    const doctorId = cleanString(body.doctorId, 100);
+    const doctorName = cleanString(body.doctorName, 200) || "Doctor";
+    if (!referralId || !doctorId) {
+      return NextResponse.json({ success: false, error: "Referral ID and doctor ID required." }, { status: 400 });
     }
-
-    if (!doctorId) {
-      return NextResponse.json(
-        {
-          success:
-            false,
-
-          error:
-            "Doctor ID is required.",
-        },
-        {
-          status: 400,
-          headers:
-            noStoreHeaders(),
-        },
-      );
+    if (body.databaseSource && !["carescriber", "hivclintest"].includes(body.databaseSource)) {
+      return NextResponse.json({ success: false, error: "Invalid database source." }, { status: 400 });
     }
-
-    if (
-      body.action ===
-      "accept"
-    ) {
-      const referral =
-        await acceptReferral({
-          referralId,
-          doctorId,
-          doctorName,
-          databaseSource:
-            body.databaseSource,
-        });
-
-      if (!referral) {
-        return NextResponse.json(
-          {
-            success:
-              false,
-
-            error:
-              "This request could not be accepted.",
-          },
-          {
-            status: 409,
-            headers:
-              noStoreHeaders(),
-          },
-        );
-      }
-
-      return NextResponse.json(
-        {
-          success:
-            true,
-
-          action:
-            "accept",
-
-          referral,
-
-          message:
-            referral.source ===
-            "HIVClinTest"
-              ? "HIVClinTest Virtual GP consultation accepted."
-              : "Virtual consultation request accepted.",
-        },
-        {
-          status: 200,
-          headers:
-            noStoreHeaders(),
-        },
-      );
-    }
-
-    const referral =
-      await completeReferral({
-        referralId,
-        doctorId,
-        databaseSource:
-          body.databaseSource,
-      });
-
+    const referral = await changeReferral({ action: body.action, referralId,
+      doctorId, doctorName, databaseSource: body.databaseSource });
     if (!referral) {
-      return NextResponse.json(
-        {
-          success:
-            false,
-
-          error:
-            "The referral could not be completed.",
-        },
-        {
-          status: 403,
-          headers:
-            noStoreHeaders(),
-        },
-      );
+      return NextResponse.json({ success: false,
+        error: body.action === "accept"
+          ? "Already accepted, completed, unpaid, or awaiting assignment reconciliation. Refresh the inbox."
+          : "Only the assigned doctor can complete an accepted referral.",
+      }, { status: 409, headers: noStoreHeaders() });
     }
-
-    return NextResponse.json(
-      {
-        success:
-          true,
-
-        action:
-          "complete",
-
-        referral,
-
-        message:
-          "Referral marked as completed.",
-      },
-      {
-        status: 200,
-        headers:
-          noStoreHeaders(),
-      },
-    );
-  } catch (
-    error: unknown
-  ) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Could not update this referral.";
-
-    console.error(
-      "Inbox API PATCH error:",
-      error,
-    );
-
-    return NextResponse.json(
-      {
-        success:
-          false,
-
-        error:
-          message,
-      },
-      {
-        status: 500,
-        headers:
-          noStoreHeaders(),
-      },
-    );
+    return NextResponse.json({ success: true, action: body.action, referral,
+      message: body.action === "accept" ? "Consultation accepted." : "Referral completed.",
+    }, { headers: noStoreHeaders() });
+  } catch (error) {
+    console.error("Inbox PATCH error:", error);
+    return NextResponse.json({ success: false,
+      error: error instanceof Error ? error.message : "Could not update referral.",
+    }, { status: 500, headers: noStoreHeaders() });
   }
 }
