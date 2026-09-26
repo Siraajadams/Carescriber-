@@ -328,7 +328,6 @@ const headers = {
   Authorization: `Bearer ${accessToken}`,
 };
 
-      const accessToken =
         sessionData.session?.access_token;
 
       if (authError || !accessToken) {
