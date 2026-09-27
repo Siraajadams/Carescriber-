@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -327,19 +326,6 @@ const headers = {
   "Content-Type": "application/json",
   Authorization: `Bearer ${accessToken}`,
 };
-
-        sessionData.session?.access_token;
-
-      if (authError || !accessToken) {
-        throw new Error(
-          "Please sign in to CareScriber before opening a referral."
-        );
-      }
-
-      const headers = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      };
 
       // Check the referral and recorded consent.
       const lookupResponse = await fetch(
