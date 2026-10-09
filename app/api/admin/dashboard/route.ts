@@ -768,247 +768,135 @@ export async function GET(
 
     /*
     ======================================================
-    ICD-10 ANALYTICS
+    ICD-10 AND MEDICATION ANALYTICS
     ======================================================
-
-    Read from:
-    1. top-level prescription fields
-    2. prescription.items JSON
+    Read from existing monthly consultations and prescriptions.
+    A single diagnosis is counted once per clinical record.
     ======================================================
     */
 
-    const icdMap = new Map<
-      string,
-      {
-        code: string;
-        description: string;
-        count: number;
-      }
-    >();
+    const icdMap = new Map<string, { code: string; description: string; count: number }>();
+    const medicationMap = new Map<string, { medication: string; count: number; patients: Set<string> }>();
 
-    prescriptionRows.forEach(
-      (prescription: any) => {
-        let foundAny = false;
+    const diagnosisContainers = [
+      "diagnoses", "diagnosis", "icd10", "icd10_codes", "icd10_code",
+      "diagnosis_codes", "assessment", "soap", "soap_note", "soap_notes",
+      "clinical_notes", "notes", "items", "data", "consultation_data",
+    ];
 
-        /*
-        TOP-LEVEL ICD
-        */
-
-        const topCode =
-          clean(
-            prescription.icd10_code
-          ).toUpperCase();
-
-        const topDescription =
-          clean(
-            prescription.icd10_description
-          );
-
-        if (
-          topCode ||
-          topDescription
-        ) {
-          const key =
-            `${topCode}|${topDescription}`
-              .toLowerCase();
-
-          const existing =
-            icdMap.get(key);
-
-          if (existing) {
-            existing.count++;
-          } else {
-            icdMap.set(key, {
-              code:
-                topCode ||
-                "Not recorded",
-
-              description:
-                topDescription ||
-                "Description not recorded",
-
-              count: 1,
-            });
+    function collectDiagnoses(record: any) {
+      const found = new Map<string, { code: string; description: string }>();
+      const seen = new WeakSet<object>();
+      function walk(value: any, depth = 0) {
+        if (depth > 8 || value == null) return;
+        if (typeof value === "string") {
+          const trimmed = value.trim();
+          if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length < 200000) {
+            try { walk(JSON.parse(trimmed), depth + 1); } catch { /* not JSON */ }
           }
-
-          foundAny = true;
+          return;
         }
-
-        /*
-        ITEM-LEVEL ICD
-        */
-
-        const items =
-          normalizeItems(
-            prescription.items
-          );
-
-        for (const item of items) {
-          const {
-            code,
-            description,
-          } = getIcd10FromItem(
-            item
-          );
-
-          if (
-            !code &&
-            !description
-          ) {
-            continue;
+        if (typeof value !== "object" || seen.has(value)) return;
+        seen.add(value);
+        if (Array.isArray(value)) {
+          value.forEach((entry) => walk(entry, depth + 1));
+          return;
+        }
+        const diagnosis = getIcd10FromItem(value);
+        if (diagnosis.code) {
+          const key = diagnosis.code.toUpperCase();
+          const previous = found.get(key);
+          if (!previous || (!previous.description && diagnosis.description)) {
+            found.set(key, diagnosis);
           }
-
-          const key =
-            `${code}|${description}`
-              .toLowerCase();
-
-          const existing =
-            icdMap.get(key);
-
-          if (existing) {
-            /*
-            Avoid double counting the exact same ICD
-            if it is already top-level.
-            */
-            if (!foundAny) {
-              existing.count++;
-            }
-          } else {
-            icdMap.set(key, {
-              code:
-                code ||
-                "Not recorded",
-
-              description:
-                description ||
-                "Description not recorded",
-
-              count: 1,
-            });
-          }
+        }
+        for (const key of diagnosisContainers) {
+          if (Object.prototype.hasOwnProperty.call(value, key)) walk(value[key], depth + 1);
         }
       }
-    );
-
-    const icd10 =
-      Array.from(
-        icdMap.values()
-      )
-        .sort(
-          (a, b) =>
-            b.count - a.count
-        )
-        .slice(0, 20);
-
-    /*
-    ======================================================
-    MEDICATION ANALYTICS
-    ======================================================
-    */
-
-    const medicationMap =
-      new Map<
-        string,
-        {
-          medication: string;
-          count: number;
-          patients: Set<string>;
-        }
-      >();
-
-    prescriptionRows.forEach(
-      (prescription: any) => {
-        let items =
-          normalizeItems(
-            prescription.items
-          );
-
-        /*
-        Fallback for old records
-        */
-
-        if (
-          items.length === 0 &&
-          prescription.medicine
-        ) {
-          items = [
-            {
-              medicine:
-                prescription.medicine,
-            },
-          ];
-        }
-
-        for (const item of items) {
-          const medication =
-            getMedicationName(item);
-
-          if (!medication) {
-            continue;
+      walk(record);
+      for (const item of found.values()) {
+        const existing = icdMap.get(item.code);
+        if (existing) {
+          existing.count += 1;
+          if ((!existing.description || existing.description === "Description not recorded") && item.description) {
+            existing.description = item.description;
           }
-
-          const medicationKey =
-            medication.toLowerCase();
-
-          if (
-            !medicationMap.has(
-              medicationKey
-            )
-          ) {
-            medicationMap.set(
-              medicationKey,
-              {
-                medication,
-                count: 0,
-                patients:
-                  new Set<string>(),
-              }
-            );
-          }
-
-          const record =
-            medicationMap.get(
-              medicationKey
-            )!;
-
-          record.count++;
-
-          const patientKey =
-            clean(
-              prescription.patient_id
-            ) ||
-            lower(
-              prescription.patient_name
-            );
-
-          if (patientKey) {
-            record.patients.add(
-              patientKey
-            );
-          }
+        } else {
+          icdMap.set(item.code, {
+            code: item.code,
+            description: item.description || "Description not recorded",
+            count: 1,
+          });
         }
       }
-    );
+    }
 
-    const medications =
-      Array.from(
-        medicationMap.values()
-      )
-        .map((item) => ({
-          medication:
-            item.medication,
+    // Keep diagnoses from consultation and prescription sources.
+    consultationRows.forEach(collectDiagnoses);
+    prescriptionRows.forEach(collectDiagnoses);
 
-          count:
-            item.count,
+    const medicationContainers = [
+      "items", "medications", "medicines", "drugs", "prescribed_medications",
+      "prescription_items", "medication_list", "medicine", "medication",
+    ];
 
-          patients:
-            item.patients.size,
-        }))
-        .sort(
-          (a, b) =>
-            b.count - a.count
-        )
-        .slice(0, 20);
+    prescriptionRows.forEach((prescription: any) => {
+      const entries: any[] = [];
+      const seen = new WeakSet<object>();
+      function visit(value: any, depth = 0) {
+        if (depth > 7 || value == null) return;
+        if (typeof value === "string") {
+          const trimmed = value.trim();
+          if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            try { visit(JSON.parse(trimmed), depth + 1); return; } catch { /* plain text */ }
+          }
+          if (trimmed) entries.push({ medicine: trimmed });
+          return;
+        }
+        if (typeof value !== "object" || seen.has(value)) return;
+        seen.add(value);
+        if (Array.isArray(value)) {
+          value.forEach((entry) => visit(entry, depth + 1));
+          return;
+        }
+        const name = getMedicationName(value);
+        if (name) { entries.push(value); return; }
+        for (const key of medicationContainers) {
+          if (Object.prototype.hasOwnProperty.call(value, key)) visit(value[key], depth + 1);
+        }
+      }
+      // Prioritise the line items; avoid counting the same prescription twice
+      // from both its top-level fields and nested line items.
+      const itemSources = medicationContainers
+        .filter((key) => key !== "medicine" && key !== "medication")
+        .map((key) => prescription[key])
+        .filter((value) => value != null);
+      itemSources.forEach((value) => visit(value));
+      if (entries.length === 0) visit(prescription.medicine ?? prescription.medication);
+      const patientKey = clean(prescription.patient_id) || lower(prescription.patient_name);
+      entries.forEach((entry) => {
+        const medication = getMedicationName(entry);
+        if (!medication) return;
+        const key = medication.toLowerCase();
+        let row = medicationMap.get(key);
+        if (!row) {
+          row = { medication, count: 0, patients: new Set<string>() };
+          medicationMap.set(key, row);
+        }
+        row.count += 1;
+        if (patientKey) row.patients.add(patientKey);
+      });
+    });
+
+    const icd10 = Array.from(icdMap.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
+
+    const medications = Array.from(medicationMap.values())
+      .map((row) => ({ medication: row.medication, count: row.count, patients: row.patients.size }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
 
     /*
     ======================================================
