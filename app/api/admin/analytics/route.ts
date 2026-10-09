@@ -38,7 +38,11 @@ function rangeFor(period: Period) {
 function medicationName(value: unknown, fallback: unknown) {
   let obj: unknown = value;
   if (typeof obj === "string") {
-    try { obj = JSON.parse(obj); } catch { return obj.trim() || String(fallback || "").trim(); }
+    try {
+  obj = JSON.parse(obj);
+} catch {
+  return String(obj ?? "").trim() || String(fallback ?? "").trim();
+}
   }
   if (obj && typeof obj === "object" && !Array.isArray(obj)) {
     const m = obj as Record<string, unknown>;
