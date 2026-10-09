@@ -42,6 +42,7 @@ export default function DashboardPage() {
   const [doctorName, setDoctorName] = useState("Doctor");
   const [profileSummary, setProfileSummary] = useState("");
   const [loading, setLoading] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
 
   const [waitingReferralCount, setWaitingReferralCount] = useState(0);
 
@@ -77,6 +78,12 @@ export default function DashboardPage() {
           referral.queue_status === "waiting",
       );
 
+      waiting.sort((a, b) => {
+        const aTime = Date.parse(a.created_at || a.paid_at || "") || Number.MAX_SAFE_INTEGER;
+        const bTime = Date.parse(b.created_at || b.paid_at || "") || Number.MAX_SAFE_INTEGER;
+        return aTime - bTime;
+      });
+
       setWaitingReferralCount(waiting.length);
 
       setOldestWaitingReferral(
@@ -88,9 +95,7 @@ export default function DashboardPage() {
         error,
       );
 
-      setWaitingReferralCount(0);
-      setOldestWaitingReferral(null);
-
+      // Preserve the last successful inbox data during transient failures.
       setInboxError(
         error instanceof Error
           ? error.message
@@ -200,7 +205,7 @@ export default function DashboardPage() {
           summaryParts.join(" • "),
         );
 
-        await loadInboxSummary();
+        setAuthenticated(true);
       } catch (error) {
         console.error(
           "Dashboard profile error:",
@@ -215,6 +220,9 @@ export default function DashboardPage() {
   }, [router]);
 
   useEffect(() => {
+    if (!authenticated) return;
+
+    void loadInboxSummary();
     const timer = window.setInterval(
       () => {
         void loadInboxSummary();
@@ -225,9 +233,10 @@ export default function DashboardPage() {
     return () => {
       window.clearInterval(timer);
     };
-  }, []);
+  }, [authenticated]);
 
   async function logout() {
+    setAuthenticated(false);
     await supabase.auth.signOut();
 
     router.replace("/login");
