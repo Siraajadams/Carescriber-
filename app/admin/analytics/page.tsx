@@ -1,6 +1,4 @@
-"use client";
-
-import Link from "next/link";
+ from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase";
 
@@ -158,7 +156,7 @@ export default function AdminAnalyticsPage() {
             headStyles: { fillColor: [15, 118, 110] },
             margin: { left: margin, right: margin },
           });
-          y = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 15;
+          y = (doc as typeof doc & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? (y + 15);
           y += 14;
         }
         const pages = doc.getNumberOfPages();
