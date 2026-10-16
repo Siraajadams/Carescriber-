@@ -81,6 +81,8 @@ export default function AdminAnalyticsPage() {
   const [data, setData] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [exportSection, setExportSection] = useState("all");
+  const [exporting, setExporting] = useState(false);
   const load = useCallback(async (selected: Period, signal: AbortSignal) => {
     setLoading(true); setError("");
     try {
@@ -98,6 +100,82 @@ export default function AdminAnalyticsPage() {
   }, []);
   useEffect(() => { const controller = new AbortController(); void load(period, controller.signal); return () => controller.abort(); }, [period, load]);
   const refresh = () => { setPeriod(p => p); const controller = new AbortController(); void load(period, controller.signal); };
+  const exportReport = async (format: "pdf" | "excel") => {
+    if (!data || loading || exporting) return;
+    setExporting(true);
+    setError("");
+    try {
+      const sections = {
+        summary: { title: "Summary", headers: ["Metric", "Count"], rows: [
+          ["Consultations", data.consultations], ["Prescriptions", data.prescriptions],
+          ["Medication items (top 20)", data.topMedications.reduce((sum, x) => sum + x.count, 0)],
+        ] },
+        activity: { title: "Clinical Activity", headers: ["Date", "Consultations", "Prescriptions"], rows: data.timeline.map(x => [x.day, x.consultations, x.prescriptions]) },
+        diagnoses: { title: "ICD-10 Diagnoses", headers: ["ICD-10 Code", "Description", "Count"], rows: data.topDiagnoses.map(x => [x.code, x.description, x.count]) },
+        medications: { title: "Medications", headers: ["Medication", "Count"], rows: data.topMedications.map(x => [x.name, x.count]) },
+      };
+      const selected = (Object.entries(sections) as [keyof typeof sections, typeof sections.summary][])
+        .filter(([key]) => exportSection === "all" || exportSection === key)
+        .map(([, value]) => value);
+      const filename = `CareScriber_${exportSection}_${data.range.start}_to_${data.range.end}`;
+      if (format === "excel") {
+        const XLSX = await import("xlsx");
+        const workbook = XLSX.utils.book_new();
+        for (const section of selected) {
+          const worksheet = XLSX.utils.aoa_to_sheet([
+            ["CareScriber Clinical Insights"],
+            [`Period: ${data.range.start} to ${data.range.end} (SAST)`],
+            [section.title], [], section.headers, ...section.rows,
+          ]);
+          worksheet["!cols"] = section.headers.map((_, i) => ({ wch: i === 1 ? 45 : 25 }));
+          XLSX.utils.book_append_sheet(workbook, worksheet, section.title.slice(0, 31));
+        }
+        XLSX.writeFile(workbook, `${filename}.xlsx`);
+      } else {
+        const { jsPDF } = await import("jspdf");
+        const { default: autoTable } = await import("jspdf-autotable");
+        const doc = new jsPDF();
+        const margin = 14;
+        const pageHeight = doc.internal.pageSize.getHeight();
+        doc.setFontSize(18);
+        doc.setTextColor(15, 118, 110);
+        doc.text("CareScriber Clinical Insights", margin, 20);
+        doc.setFontSize(10);
+        doc.setTextColor(75, 85, 99);
+        doc.text(`Reporting period: ${data.range.start} to ${data.range.end} (SAST)`, margin, 28);
+        let y = 37;
+        for (const section of selected) {
+          if (y > pageHeight - 40) { doc.addPage(); y = 20; }
+          doc.setFontSize(13);
+          doc.setTextColor(16, 36, 58);
+          doc.text(section.title, margin, y);
+          autoTable(doc, {
+            startY: y + 4,
+            head: [section.headers],
+            body: section.rows.map(row => row.map(value => String(value))),
+            theme: "striped",
+            styles: { fontSize: 9, cellPadding: 3 },
+            headStyles: { fillColor: [15, 118, 110] },
+            margin: { left: margin, right: margin },
+          });
+          y = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 15;
+          y += 14;
+        }
+        const pages = doc.getNumberOfPages();
+        for (let i = 1; i <= pages; i++) {
+          doc.setPage(i);
+          doc.setFontSize(8);
+          doc.setTextColor(100, 116, 139);
+          doc.text(`CareScriber | Page ${i} of ${pages}`, margin, pageHeight - 8);
+        }
+        doc.save(`${filename}.pdf`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? `Export failed: ${e.message}` : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
   const card = (title: string, value: number, icon: string, accent: string, subtitle: string) =>
     <div style={{ ...panel, borderTop: `4px solid ${accent}` }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
       <span style={{ color: palette.muted, fontWeight: 600, fontSize: 14 }}>{title}</span><span style={{ fontSize: 25 }}>{icon}</span></div>
@@ -114,7 +192,19 @@ export default function AdminAnalyticsPage() {
       <section style={{ ...panel, marginBottom: 22 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
           <strong>Reporting period</strong>
-          <button type="button" onClick={refresh} disabled={loading} style={{ cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 9, background: "white", padding: "9px 14px" }}>↻ Refresh</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <label htmlFor="export-section" style={{ fontSize: 13, color: palette.muted }}>Export section</label>
+            <select id="export-section" value={exportSection} onChange={e => setExportSection(e.target.value)} style={{ padding: "9px", border: "1px solid #cbd5e1", borderRadius: 9 }}>
+              <option value="all">Complete report</option>
+              <option value="summary">Summary</option>
+              <option value="activity">Clinical activity</option>
+              <option value="diagnoses">ICD-10 diagnoses</option>
+              <option value="medications">Medications</option>
+            </select>
+            <button type="button" onClick={() => void exportReport("pdf")} disabled={!data || loading || exporting} style={{ cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 9, background: "white", padding: "9px 14px" }}>Export PDF</button>
+            <button type="button" onClick={() => void exportReport("excel")} disabled={!data || loading || exporting} style={{ cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 9, background: "white", padding: "9px 14px" }}>Export Excel</button>
+            <button type="button" onClick={refresh} disabled={loading} style={{ cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 9, background: "white", padding: "9px 14px" }}>↻ Refresh</button>
+          </div>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {periods.map(p => <button key={p.value} type="button" onClick={() => setPeriod(p.value)} aria-pressed={period === p.value}
