@@ -1,3 +1,4 @@
+
 {
   "name": "carescriber",
   "version": "1.0.0",
@@ -11,12 +12,14 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.53.0",
     "jspdf": "^3.0.1",
+    "jspdf-autotable": "^5.0.0",
     "next": "^15.3.4",
     "openai": "^5.8.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "resend": "^4.6.0",
-    "stripe": "^18.3.0"
+    "stripe": "^18.3.0",
+    "xlsx": "0.18.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.3",
