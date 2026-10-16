@@ -1,59 +1,39 @@
 import OpenAI from "openai";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export async function POST(req: Request) {
+const MAX_BYTES = 20 * 1024 * 1024;
+const ALLOWED_TYPES = new Set(["audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg", "audio/flac", "audio/m4a", "video/mp4"]);
+
+export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData();
+    if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: "OPENAI_API_KEY is not configured." }, { status: 500 });
+    const form = await req.formData();
+    const audio = form.get("audio");
+    if (!(audio instanceof File) || audio.size === 0) return NextResponse.json({ error: "No audio file uploaded." }, { status: 400 });
+    if (audio.size > MAX_BYTES) return NextResponse.json({ error: "Audio file exceeds 20 MB." }, { status: 413 });
+    if (audio.type && !ALLOWED_TYPES.has(audio.type)) return NextResponse.json({ error: "Unsupported audio format." }, { status: 415 });
 
-    const audio = formData.get("audio");
-
-    if (!audio || !(audio instanceof File)) {
-      return NextResponse.json(
-        { error: "No audio file uploaded." },
-        { status: 400 }
-      );
-    }
-
-    const transcription = await openai.audio.transcriptions.create({
+    const vocabulary = String(form.get("vocabulary") ?? "").slice(0, 1200);
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const result = await client.audio.transcriptions.create({
       file: audio,
       model: "gpt-4o-transcribe",
       language: "en",
-      prompt: `
-You are a clinical medical transcription assistant.
-
-Rules:
-- Produce a clean clinical transcript.
-- NEVER repeat words or sentences.
-- Correct medical terminology.
-- Preserve medicine names.
-- Preserve diagnoses.
-- Remove filler words like "uh", "erm", "okay".
-- Return ONLY the transcript.
-`,
+      prompt: [
+        "South African English clinical consultation. Transcribe faithfully, including patient and clinician speech.",
+        "Preserve drug names, strengths, units, route, frequency, duration, diagnoses, negations, and corrections exactly as spoken.",
+        "Do not infer missing words, findings or dosages. Do not generate SOAP notes. Keep clinically meaningful repetition.",
+        vocabulary ? `Relevant vocabulary (hints, not facts): ${vocabulary}` : "",
+      ].filter(Boolean).join("\n"),
     });
-
-    const cleaned = transcription.text
-      .replace(/\b(uh|um|erm|ah)\b/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    return NextResponse.json({
-      transcript: cleaned,
-    });
-  } catch (error: any) {
-    console.error(error);
-
-    return NextResponse.json(
-      {
-        error: error.message,
-      },
-      {
-        status: 500,
-      }
-    );
+    const transcript = result.text.trim();
+    if (!transcript) return NextResponse.json({ error: "No speech could be transcribed." }, { status: 422 });
+    return NextResponse.json({ transcript });
+  } catch (error: unknown) {
+    console.error("Transcription failed", error);
+    return NextResponse.json({ error: "Transcription failed. Please retry or enter a manual transcript." }, { status: 500 });
   }
 }
