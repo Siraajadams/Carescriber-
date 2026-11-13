@@ -1076,28 +1076,91 @@ decisions require clinician verification.
             {selectedPatient.id && (
               <div
                 style={{
-                  marginTop: 20,
-                  display: "flex",
-                  gap: 15,
-                  flexWrap: "wrap",
+                  marginTop: 24,
+                  display: "grid",
+                  gap: 14,
+                  width: "100%",
                 }}
               >
-                <Link
-                  href={`/sick-note?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: 12,
+                  }}
                 >
-                  Sick Note
-                </Link>
+                  <Link
+                    href={`/e-script?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 10,
+                      minHeight: 125,
+                      padding: "18px 8px",
+                      background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                      color: "#ffffff",
+                      borderRadius: 18,
+                      textDecoration: "none",
+                      textAlign: "center",
+                      fontWeight: 800,
+                      fontSize: "clamp(18px, 4vw, 25px)",
+                      boxShadow: "0 6px 14px rgba(37,99,235,0.25)",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <span aria-hidden="true" style={{ fontSize: 36 }}>📝</span>
+                    <span>eScript</span>
+                  </Link>
 
-                <Link
-                  href={`/e-script?patientId=${encodeURIComponent(selectedPatient.id)}`}
-                >
-                  eScript
-                </Link>
+                  <Link
+                    href={`/sick-note?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 10,
+                      minHeight: 125,
+                      padding: "18px 8px",
+                      background: "linear-gradient(135deg, #16a34a, #15803d)",
+                      color: "#ffffff",
+                      borderRadius: 18,
+                      textDecoration: "none",
+                      textAlign: "center",
+                      fontWeight: 800,
+                      fontSize: "clamp(18px, 4vw, 25px)",
+                      boxShadow: "0 6px 14px rgba(22,163,74,0.25)",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <span aria-hidden="true" style={{ fontSize: 36 }}>📄</span>
+                    <span>Sick Note</span>
+                  </Link>
+                </div>
 
                 <Link
                   href={`/referral?patientId=${encodeURIComponent(selectedPatient.id)}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    minHeight: 56,
+                    padding: 12,
+                    background: "#ffffff",
+                    color: "#1d4ed8",
+                    border: "2px solid #2563eb",
+                    borderRadius: 14,
+                    textDecoration: "none",
+                    fontWeight: 700,
+                    fontSize: 19,
+                    boxSizing: "border-box",
+                  }}
                 >
-                  Referral
+                  <span aria-hidden="true">↗</span>
+                  <span>Referral</span>
                 </Link>
               </div>
             )}
