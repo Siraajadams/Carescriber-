@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -70,10 +71,11 @@ export default function InboxPage() {
   const [currentDoctorName, setCurrentDoctorName] =
     useState("Doctor");
 
+  const requestInProgress = useRef(false);
+
   const loadInbox = useCallback(async () => {
+    if (requestInProgress.current) return;
     setLoading(true);
-    setMessage("");
-    setIsError(false);
 
     try {
       const {
@@ -109,6 +111,10 @@ export default function InboxPage() {
       setCurrentDoctorId(user.id);
       setCurrentDoctorName(doctorName);
 
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Session expired. Please log in again.");
+
       const response = await fetch(
         "/api/inbox-referrals",
         {
@@ -116,7 +122,9 @@ export default function InboxPage() {
           cache: "no-store",
           headers: {
             Accept: "application/json",
+            Authorization: `Bearer ${accessToken}`,
           },
+          signal: AbortSignal.timeout(15000),
         },
       );
 
@@ -162,7 +170,7 @@ export default function InboxPage() {
    */
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void loadInbox();
+      if (!requestInProgress.current) void loadInbox();
     }, 30_000);
 
     return () => {
@@ -174,68 +182,75 @@ export default function InboxPage() {
     action: "accept" | "complete",
     referralId: string,
   ) {
-    if (!currentDoctorId) {
-      router.push("/login");
-      return;
-    }
-
+    if (requestInProgress.current) return;
+    requestInProgress.current = true;
     setWorkingId(referralId);
     setMessage("");
     setIsError(false);
 
     try {
-      const response = await fetch(
-        "/api/inbox-referrals",
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({
-            action,
-            referralId,
-            doctorId: currentDoctorId,
-            doctorName: currentDoctorName,
-          }),
+      // The server must independently verify the user's identity and
+      // atomically claim an unassigned referral; never trust doctorId alone.
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+      if (userError || !userData.user) {
+        throw new Error("Login expired. Please sign in again.");
+      }
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (sessionError || !accessToken) {
+        throw new Error("Session unavailable. Please sign in again.");
+      }
+
+      const response = await fetch("/api/inbox-referrals", {
+        method: "PATCH",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
         },
-      );
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          action,
+          referralId,
+          doctorId: userData.user.id,
+          doctorName: currentDoctorName,
+        }),
+      });
 
-      const payload =
-        (await response
-          .json()
-          .catch(() => ({}))) as InboxResponse;
-
-      if (!response.ok || payload.success === false) {
+      const payload = (await response.json().catch(() => ({}))) as InboxResponse;
+      if (!response.ok || payload.success !== true) {
         throw new Error(
-          payload.error ||
-            "Could not update this referral.",
+          payload.error || payload.message ||
+            `Could not ${action} referral (HTTP ${response.status}).`,
         );
       }
 
+      // Do not declare success based solely on a response from the API.
+      // The next refresh will show the authoritative queue state.
       setMessage(
         payload.message ||
           (action === "accept"
-            ? "Virtual consultation request accepted."
-            : "Referral marked as completed."),
+            ? "Acceptance submitted. Check the assigned doctor below."
+            : "Completion submitted. Refresh to confirm status."),
       );
-
-      await loadInbox();
     } catch (error: unknown) {
-      console.error(
-        `${action} referral error:`,
-        error,
-      );
-
+      console.error(`${action} referral error:`, error);
       setIsError(true);
-
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not update this referral.",
+        error instanceof Error && error.name === "TimeoutError"
+          ? "Request timed out after 15 seconds. Refresh to check whether it was accepted before trying again."
+          : error instanceof Error
+            ? error.message
+            : "Could not update this referral.",
       );
     } finally {
+      requestInProgress.current = false;
       setWorkingId(null);
+      // Refresh even after timeout: the server may have committed the update.
+      void loadInbox();
     }
   }
 
