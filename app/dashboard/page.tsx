@@ -1,7 +1,13 @@
+
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
@@ -22,6 +28,7 @@ type InboxReferral = {
   payment_status?: string | null;
   queue_status?: string | null;
   referral_status?: string | null;
+  archived_at?: string | null;
   patient_first_name?: string | null;
   patient_surname?: string | null;
   patient_name?: string | null;
@@ -34,77 +41,154 @@ type InboxResponse = {
   count?: number;
   referrals?: InboxReferral[];
   error?: string;
+  message?: string;
 };
 
 export default function DashboardPage() {
   const router = useRouter();
 
-  const [doctorName, setDoctorName] = useState("Doctor");
-  const [profileSummary, setProfileSummary] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [authenticated, setAuthenticated] = useState(false);
+  const [doctorName, setDoctorName] =
+    useState("Doctor");
 
-  const [waitingReferralCount, setWaitingReferralCount] = useState(0);
+  const [profileSummary, setProfileSummary] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [authenticated, setAuthenticated] =
+    useState(false);
+
+  const [waitingReferralCount, setWaitingReferralCount] =
+    useState(0);
 
   const [oldestWaitingReferral, setOldestWaitingReferral] =
     useState<InboxReferral | null>(null);
 
-  const [inboxError, setInboxError] = useState("");
+  const [inboxError, setInboxError] =
+    useState("");
 
-  async function loadInboxSummary() {
+  const [inboxLoading, setInboxLoading] =
+    useState(false);
+
+  const [lastInboxUpdate, setLastInboxUpdate] =
+    useState<string | null>(null);
+
+  const requestInProgress = useRef(false);
+
+  // =====================================================
+  // AUTHENTICATED INBOX SUMMARY
+  // =====================================================
+
+  const loadInboxSummary = useCallback(async () => {
+    if (requestInProgress.current) return;
+
+    requestInProgress.current = true;
+    setInboxLoading(true);
+
     try {
-      setInboxError("");
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-      const response = await fetch("/api/inbox-referrals", {
-        method: "GET",
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      const payload =
-        (await response.json().catch(() => ({}))) as InboxResponse;
-
-      if (!response.ok || payload.success === false) {
+      if (sessionError || !session?.access_token) {
         throw new Error(
-          payload.error || "Could not load the virtual consult inbox.",
+          "Session expired. Please sign in again."
         );
       }
 
-      const waiting = (payload.referrals || []).filter(
-        (referral) =>
+      const response = await fetch(
+        "/api/inbox-referrals",
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+            Authorization:
+              `Bearer ${session.access_token}`,
+          },
+          signal: AbortSignal.timeout(20000),
+        }
+      );
+
+      const payload =
+        (await response
+          .json()
+          .catch(() => ({}))) as InboxResponse;
+
+      if (!response.ok || payload.success !== true) {
+        throw new Error(
+          payload.error ||
+          payload.message ||
+          `Inbox request failed (HTTP ${response.status}).`
+        );
+      }
+
+      if (!Array.isArray(payload.referrals)) {
+        throw new Error(
+          "The inbox API returned an invalid referral list."
+        );
+      }
+
+      const waiting = payload.referrals.filter(
+        referral =>
           referral.payment_status === "paid" &&
-          referral.queue_status === "waiting",
+          referral.queue_status === "waiting" &&
+          !referral.archived_at
       );
 
       waiting.sort((a, b) => {
-        const aTime = Date.parse(a.created_at || a.paid_at || "") || Number.MAX_SAFE_INTEGER;
-        const bTime = Date.parse(b.created_at || b.paid_at || "") || Number.MAX_SAFE_INTEGER;
-        return aTime - bTime;
+        const aTime = Date.parse(
+          a.paid_at || a.created_at || ""
+        );
+
+        const bTime = Date.parse(
+          b.paid_at || b.created_at || ""
+        );
+
+        return (
+          (Number.isFinite(aTime)
+            ? aTime
+            : Number.MAX_SAFE_INTEGER) -
+          (Number.isFinite(bTime)
+            ? bTime
+            : Number.MAX_SAFE_INTEGER)
+        );
       });
 
       setWaitingReferralCount(waiting.length);
+      setOldestWaitingReferral(waiting[0] || null);
+      setLastInboxUpdate(new Date().toISOString());
+      setInboxError("");
 
-      setOldestWaitingReferral(
-        waiting[0] || null,
-      );
     } catch (error: unknown) {
       console.error(
         "Could not load inbox summary:",
-        error,
+        error
       );
 
-      // Preserve the last successful inbox data during transient failures.
+      // Preserve last successful inbox data.
       setInboxError(
         error instanceof Error
-          ? error.message
-          : "Could not load the virtual consult inbox.",
+          ? error.name === "TimeoutError"
+            ? "Inbox request timed out. Please refresh."
+            : error.message
+          : "Could not load the virtual consult inbox."
       );
+    } finally {
+      requestInProgress.current = false;
+      setInboxLoading(false);
     }
-  }
+  }, []);
+
+  // =====================================================
+  // LOGIN AND DOCTOR PROFILE
+  // =====================================================
 
   useEffect(() => {
+    let cancelled = false;
+
     async function checkLogin() {
       try {
         const {
@@ -112,54 +196,48 @@ export default function DashboardPage() {
           error: userError,
         } = await supabase.auth.getUser();
 
+        if (cancelled) return;
+
         if (userError || !user) {
           router.replace("/login");
           return;
         }
 
-        let profile: DoctorProfile | null =
-          null;
+        let profile: DoctorProfile | null = null;
+
+        const columns = `
+          first_name,
+          surname,
+          last_name,
+          email,
+          hpcsa,
+          registration_number,
+          practice_number
+        `;
 
         const byId = await supabase
           .from("profiles")
-          .select(`
-            first_name,
-            surname,
-            last_name,
-            email,
-            hpcsa,
-            registration_number,
-            practice_number
-          `)
+          .select(columns)
           .eq("id", user.id)
           .maybeSingle();
 
+        if (cancelled) return;
+
         if (!byId.error && byId.data) {
-          profile =
-            byId.data as DoctorProfile;
+          profile = byId.data as DoctorProfile;
         }
 
         if (!profile) {
           const byUserId = await supabase
             .from("profiles")
-            .select(`
-              first_name,
-              surname,
-              last_name,
-              email,
-              hpcsa,
-              registration_number,
-              practice_number
-            `)
+            .select(columns)
             .eq("user_id", user.id)
             .maybeSingle();
 
-          if (
-            !byUserId.error &&
-            byUserId.data
-          ) {
-            profile =
-              byUserId.data as DoctorProfile;
+          if (cancelled) return;
+
+          if (!byUserId.error && byUserId.data) {
+            profile = byUserId.data as DoctorProfile;
           }
         }
 
@@ -202,63 +280,114 @@ export default function DashboardPage() {
         ].filter(Boolean);
 
         setProfileSummary(
-          summaryParts.join(" • "),
+          summaryParts.join(" • ")
         );
 
         setAuthenticated(true);
+
       } catch (error) {
         console.error(
           "Dashboard profile error:",
-          error,
+          error
         );
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
     void checkLogin();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
+
+  // =====================================================
+  // AUTOMATIC INBOX REFRESH
+  // =====================================================
 
   useEffect(() => {
     if (!authenticated) return;
 
     void loadInboxSummary();
-    const timer = window.setInterval(
-      () => {
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
         void loadInboxSummary();
-      },
-      30_000,
+      }
+    }, 30000);
+
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "visible") {
+        void loadInboxSummary();
+      }
+    };
+
+    window.addEventListener(
+      "focus",
+      refreshOnFocus
     );
 
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener(
+        "focus",
+        refreshOnFocus
+      );
     };
-  }, [authenticated]);
+  }, [authenticated, loadInboxSummary]);
+
+  // =====================================================
+  // LOGOUT
+  // =====================================================
 
   async function logout() {
     setAuthenticated(false);
+
     await supabase.auth.signOut();
 
     router.replace("/login");
-
     router.refresh();
   }
+
+  // =====================================================
+  // LOADING
+  // =====================================================
 
   if (loading) {
     return (
       <main style={styles.page}>
         <section style={styles.card}>
           <p style={styles.loading}>
-            Loading dashboard…
+            Loading dashboard...
           </p>
         </section>
       </main>
     );
   }
 
+  if (!authenticated) {
+    return (
+      <main style={styles.page}>
+        <section style={styles.card}>
+          <p style={styles.loading}>
+            Verifying doctor access...
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  // =====================================================
+  // DASHBOARD
+  // =====================================================
+
   return (
     <main style={styles.page}>
       <section style={styles.card}>
+
         <p style={styles.label}>
           CareScriber AI
         </p>
@@ -268,41 +397,33 @@ export default function DashboardPage() {
         </h1>
 
         <p style={styles.subtitle}>
-          Secure clinical assistant for
-          virtual consultations, SOAP
-          notes, patient summaries,
-          prescriptions, referrals and
-          clinical documents.
+          Secure clinical assistant for virtual
+          consultations, SOAP notes, patient
+          summaries, prescriptions, referrals
+          and clinical documents.
         </p>
 
         {profileSummary && (
-          <div
-            style={styles.profileSummary}
-          >
+          <div style={styles.profileSummary}>
             {profileSummary}
           </div>
         )}
 
         <div style={styles.grid}>
+
           {/* VIRTUAL CONSULT INBOX */}
+
           <Link
             href="/inbox"
             style={styles.inboxCard}
           >
-            <div
-              style={styles.inboxTopRow}
-            >
+            <div style={styles.inboxTopRow}>
               <div style={styles.icon}>
                 📥
               </div>
 
-              {waitingReferralCount >
-                0 && (
-                <div
-                  style={
-                    styles.inboxBadge
-                  }
-                >
+              {waitingReferralCount > 0 && (
+                <div style={styles.inboxBadge}>
                   {waitingReferralCount}
                 </div>
               )}
@@ -313,70 +434,54 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Review paid SymptomAI
-              referrals, accept the
-              oldest waiting request and
-              open the linked patient
-              file.
+              Review paid SymptomAI referrals,
+              accept the oldest waiting request
+              and open the linked patient file.
             </p>
 
-            {inboxError ? (
-              <div
-                style={
-                  styles.inboxError
-                }
-              >
-                Inbox status
-                unavailable:{" "}
-                {inboxError}
+            {inboxLoading && !lastInboxUpdate && (
+              <div style={styles.inboxStatus}>
+                Checking inbox...
               </div>
-            ) : (
+            )}
+
+            {inboxError && (
+              <div style={styles.inboxError}>
+                Inbox status unavailable:{" "}
+                {inboxError}
+
+                {lastInboxUpdate && (
+                  <p style={styles.smallText}>
+                    Showing last successful inbox summary.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {(!inboxLoading || lastInboxUpdate) && (
               <>
-                <div
-                  style={
-                    styles.inboxStatus
-                  }
-                >
-                  {waitingReferralCount ===
-                  0
+                <div style={styles.inboxStatus}>
+                  {waitingReferralCount === 0
                     ? "No paid referrals currently waiting"
                     : `${waitingReferralCount} paid ${
-                        waitingReferralCount ===
-                        1
+                        waitingReferralCount === 1
                           ? "referral"
                           : "referrals"
                       } waiting`}
                 </div>
 
                 {oldestWaitingReferral && (
-                  <div
-                    style={
-                      styles.oldestReferral
-                    }
-                  >
-                    <div
-                      style={
-                        styles.oldestReferralLabel
-                      }
-                    >
-                      Oldest waiting
-                      referral
+                  <div style={styles.oldestReferral}>
+                    <div style={styles.oldestReferralLabel}>
+                      Oldest waiting referral
                     </div>
 
-                    <div
-                      style={
-                        styles.oldestReferralCode
-                      }
-                    >
+                    <div style={styles.oldestReferralCode}>
                       {oldestWaitingReferral.referral_code ||
                         "Referral code unavailable"}
                     </div>
 
-                    <div
-                      style={
-                        styles.oldestReferralReason
-                      }
-                    >
+                    <div style={styles.oldestReferralReason}>
                       <b>Reason:</b>{" "}
                       {oldestWaitingReferral.consultation_reason ||
                         "No consultation reason recorded"}
@@ -385,9 +490,24 @@ export default function DashboardPage() {
                 )}
               </>
             )}
+
+            {lastInboxUpdate && (
+              <p style={styles.smallText}>
+                Last checked:{" "}
+                {new Date(lastInboxUpdate).toLocaleTimeString(
+                  "en-ZA",
+                  {
+                    timeZone: "Africa/Johannesburg",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }
+                )}
+              </p>
+            )}
           </Link>
 
           {/* NEW CONSULTATION */}
+
           <Link
             href="/consultation"
             style={styles.primaryCard}
@@ -401,13 +521,13 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Start recording, generate
-              a transcript and create a
-              SOAP note.
+              Start recording, generate a
+              transcript and create a SOAP note.
             </p>
           </Link>
 
           {/* SEARCH PATIENT */}
+
           <Link
             href="/patients"
             style={styles.optionCard}
@@ -422,12 +542,12 @@ export default function DashboardPage() {
 
             <p style={styles.cardText}>
               Find or register a patient
-              before starting a
-              consultation.
+              before starting a consultation.
             </p>
           </Link>
 
           {/* RECENT CONSULTATIONS */}
+
           <Link
             href="/consultation"
             style={styles.optionCard}
@@ -447,6 +567,7 @@ export default function DashboardPage() {
           </Link>
 
           {/* E-SCRIPT */}
+
           <Link
             href="/e-script"
             style={styles.optionCard}
@@ -466,6 +587,7 @@ export default function DashboardPage() {
           </Link>
 
           {/* SICK NOTE */}
+
           <Link
             href="/sick-note"
             style={styles.optionCard}
@@ -485,6 +607,7 @@ export default function DashboardPage() {
           </Link>
 
           {/* MEDICAL REFERRAL */}
+
           <Link
             href="/referral"
             style={styles.referralCard}
@@ -498,16 +621,16 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Create a structured
-              medical referral with
-              patient details, clinical
-              information, ICD-10
+              Create a structured medical
+              referral with patient details,
+              clinical information, ICD-10
               diagnosis and referring
               clinician details.
             </p>
           </Link>
 
-          {/* PROFILE */}
+          {/* MY PROFILE */}
+
           <Link
             href="/profile"
             style={styles.profileCard}
@@ -521,67 +644,50 @@ export default function DashboardPage() {
             </h2>
 
             <p style={styles.cardText}>
-              Update your email, mobile
-              number, HPCSA or MP
-              number, practice number,
-              qualifications and
-              practice address.
+              Update your email, mobile number,
+              HPCSA or MP number, practice number,
+              qualifications and practice address.
             </p>
           </Link>
+
         </div>
 
+        {/* WORKFLOW */}
+
         <div style={styles.workflow}>
-          <h3
-            style={styles.workflowTitle}
-          >
+          <h3 style={styles.workflowTitle}>
             Virtual Consult Workflow
           </h3>
 
+          <p>1. Open Virtual Consult Inbox</p>
+          <p>2. Accept the oldest paid referral</p>
+          <p>3. Open the linked patient file</p>
+          <p>4. Complete consultation and SOAP note</p>
           <p>
-            1. Open Virtual Consult
-            Inbox
+            5. Generate e-Script, Sick Note
+            or Medical Referral
           </p>
-
-          <p>
-            2. Accept the oldest paid
-            referral
-          </p>
-
-          <p>
-            3. Open the linked patient
-            file
-          </p>
-
-          <p>
-            4. Complete consultation and
-            SOAP note
-          </p>
-
-          <p>
-            5. Generate e-Script, Sick
-            Note or Medical Referral
-          </p>
-
-          <p>
-            6. Mark referral completed
-          </p>
+          <p>6. Mark referral completed</p>
         </div>
 
         <button
           type="button"
-          onClick={logout}
+          onClick={() => void logout()}
           style={styles.logout}
         >
           Logout
         </button>
+
       </section>
     </main>
   );
 }
 
-const styles: {
-  [key: string]: React.CSSProperties;
-} = {
+// =====================================================
+// STYLES
+// =====================================================
+
+const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
@@ -608,8 +714,7 @@ const styles: {
   },
 
   title: {
-    fontSize:
-      "clamp(34px, 7vw, 44px)",
+    fontSize: "clamp(34px, 7vw, 44px)",
     lineHeight: 1.15,
     color: "#0f172a",
     marginTop: 16,
@@ -652,8 +757,7 @@ const styles: {
 
   inboxTopRow: {
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "flex-start",
   },
 
@@ -675,8 +779,7 @@ const styles: {
     marginTop: 16,
     padding: "10px 12px",
     borderRadius: 12,
-    background:
-      "rgba(255, 255, 255, 0.16)",
+    background: "rgba(255, 255, 255, 0.16)",
     fontSize: 15,
     fontWeight: 700,
   },
@@ -685,8 +788,7 @@ const styles: {
     marginTop: 16,
     padding: "10px 12px",
     borderRadius: 12,
-    background:
-      "rgba(254, 226, 226, 0.95)",
+    background: "rgba(254, 226, 226, 0.95)",
     color: "#991b1b",
     fontSize: 14,
     fontWeight: 700,
@@ -696,8 +798,7 @@ const styles: {
     marginTop: 12,
     padding: 14,
     borderRadius: 14,
-    background:
-      "rgba(255, 255, 255, 0.13)",
+    background: "rgba(255, 255, 255, 0.13)",
   },
 
   oldestReferralLabel: {
@@ -718,6 +819,14 @@ const styles: {
     marginTop: 8,
     fontSize: 14,
     lineHeight: 1.45,
+  },
+
+  smallText: {
+    marginTop: 12,
+    marginBottom: 0,
+    fontSize: 12,
+    lineHeight: 1.5,
+    opacity: 0.85,
   },
 
   primaryCard: {
