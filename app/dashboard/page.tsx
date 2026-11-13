@@ -227,20 +227,6 @@ export default function DashboardPage() {
           profile = byId.data as DoctorProfile;
         }
 
-        if (!profile) {
-          const byUserId = await supabase
-            .from("profiles")
-            .select(columns)
-            .eq("user_id", user.id)
-            .maybeSingle();
-
-          if (cancelled) return;
-
-          if (!byUserId.error && byUserId.data) {
-            profile = byUserId.data as DoctorProfile;
-          }
-        }
-
         const firstName =
           profile?.first_name ||
           user.user_metadata?.first_name ||
