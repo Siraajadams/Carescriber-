@@ -37,6 +37,9 @@ type InboxReferral = {
 
   created_at: string;
   paid_at: string | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 };
 
 type InboxResponse = {
@@ -70,6 +73,13 @@ export default function InboxPage() {
 
   const [currentDoctorName, setCurrentDoctorName] =
     useState("Doctor");
+
+  // Archive controls use the existing authenticated API. The API must
+  // independently authorize archive/restore and enforce clinical review.
+  const [view, setView] = useState<"active" | "review" | "archive">("active");
+  const [search, setSearch] = useState("");
+  const [reviewConfirmed, setReviewConfirmed] = useState<Record<string, boolean>>({});
+  const [archiveReason, setArchiveReason] = useState<Record<string, string>>({});
 
   const requestInProgress = useRef(false);
 
@@ -254,6 +264,90 @@ export default function InboxPage() {
     }
   }
 
+  async function changeArchive(action: "archive" | "restore", referral: InboxReferral) {
+    if (requestInProgress.current) return;
+    if (action === "archive") {
+      if (!reviewConfirmed[referral.id]) {
+        setIsError(true);
+        setMessage("Confirm clinical review before archiving this referral.");
+        return;
+      }
+      if (!archiveReason[referral.id]?.trim()) {
+        setIsError(true);
+        setMessage("Enter an archive reason before continuing.");
+        return;
+      }
+    }
+    if (!window.confirm(action === "archive"
+      ? "Archive this consultation after clinical review? Patient and clinical records must be retained."
+      : "Restore this consultation to its previous queue status?")) return;
+
+    requestInProgress.current = true;
+    setWorkingId(referral.id);
+    setMessage("");
+    setIsError(false);
+    try {
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) throw new Error("Please sign in again.");
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (sessionError || !token) throw new Error("Session expired. Please sign in again.");
+      const response = await fetch("/api/inbox-referrals", {
+        method: "PATCH",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          action,
+          referralId: referral.id,
+          reviewConfirmed: action === "archive" ? true : undefined,
+          archiveReason: action === "archive" ? archiveReason[referral.id]?.trim() : undefined,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as InboxResponse;
+      if (!response.ok || payload.success !== true) {
+        throw new Error(payload.error || payload.message ||
+          `The server did not ${action} this referral. The API may need the archive update.`);
+      }
+      setMessage(payload.message || `${action === "archive" ? "Archive" : "Restore"} request accepted. Refreshing records.`);
+      setReviewConfirmed(prev => ({ ...prev, [referral.id]: false }));
+    } catch (error: unknown) {
+      setIsError(true);
+      setMessage(error instanceof Error ? error.message : "Unable to update archive status.");
+    } finally {
+      requestInProgress.current = false;
+      setWorkingId(null);
+      void loadInbox();
+    }
+  }
+
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const isOlderThan30Days = (referral: InboxReferral) =>
+    new Date(referral.created_at).getTime() < thirtyDaysAgo;
+
+  const paidReferrals = referrals.filter(referral => referral.payment_status === "paid");
+  const activeReferrals = paidReferrals.filter(referral =>
+    !referral.archived_at &&
+    !isOlderThan30Days(referral) &&
+    ["waiting", "accepted"].includes(referral.queue_status || "")
+  );
+  const reviewReferrals = paidReferrals.filter(referral =>
+    !referral.archived_at && isOlderThan30Days(referral) &&
+    ["waiting", "accepted", "completed"].includes(referral.queue_status || "")
+  );
+  const archivedReferrals = paidReferrals.filter(referral => !!referral.archived_at);
+  const selectedReferrals = (view === "active" ? activeReferrals :
+    view === "review" ? reviewReferrals : archivedReferrals).filter(referral => {
+    const haystack = [referral.referral_code, referral.patient_first_name,
+      referral.patient_surname, referral.patient_name, referral.assigned_doctor_name,
+      referral.consultation_reason].join(" ").toLowerCase();
+    return haystack.includes(search.trim().toLowerCase());
+  });
+
   function openReferral(
     referral: InboxReferral,
   ) {
@@ -404,21 +498,44 @@ export default function InboxPage() {
         </div>
       )}
 
+      <section style={styles.archiveToolbar}>
+        <div style={styles.archiveTabs}>
+          {(["active", "review", "archive"] as const).map(tab => (
+            <button key={tab} type="button"
+              style={{ ...styles.archiveTab, ...(view === tab ? styles.archiveTabSelected : {}) }}
+              onClick={() => setView(tab)}>
+              {tab === "active" ? `Active (${activeReferrals.length})` :
+                tab === "review" ? `30-day review (${reviewReferrals.length})` :
+                `Archive (${archivedReferrals.length})`}
+            </button>
+          ))}
+        </div>
+        <input aria-label="Search referrals" style={styles.archiveSearch}
+          placeholder="Search patient, referral or doctor"
+          value={search} onChange={event => setSearch(event.target.value)} />
+        <p style={styles.archiveHelp}>
+          {view === "review"
+            ? "Older than 30 days. Review clinical status and outstanding follow-up before archiving."
+            : view === "archive"
+              ? "Archived referrals remain in the database and can be restored."
+              : "Current paid consultations. Older referrals are shown in 30-day review."}
+        </p>
+      </section>
+
       {loading ? (
         <section style={styles.emptyCard}>
           <h2 style={styles.emptyTitle}>
             Loading inbox...
           </h2>
         </section>
-      ) : referrals.length === 0 ? (
+      ) : selectedReferrals.length === 0 ? (
         <section style={styles.emptyCard}>
           <h2 style={styles.emptyTitle}>
-            No paid referrals waiting
+            No referrals in this view
           </h2>
 
           <p style={styles.emptyText}>
-            New paid SymptomAI virtual-consult
-            requests will appear here automatically.
+            Use the tabs above to view active, older or archived consultations.
           </p>
 
           <button
@@ -433,7 +550,7 @@ export default function InboxPage() {
         </section>
       ) : (
         <section style={styles.queue}>
-          {referrals.map(
+          {selectedReferrals.map(
             (referral, index) => {
               const isWaiting =
                 referral.queue_status ===
@@ -616,7 +733,7 @@ export default function InboxPage() {
                   )}
 
                   <div style={styles.buttonRow}>
-                    {isWaiting && (
+                    {view !== "archive" && isWaiting && (
                       <button
                         type="button"
                         style={
@@ -640,7 +757,7 @@ export default function InboxPage() {
                       </button>
                     )}
 
-                    {acceptedByCurrentDoctor && (
+                    {view !== "archive" && acceptedByCurrentDoctor && (
                       <>
                         <button
                           type="button"
@@ -680,7 +797,46 @@ export default function InboxPage() {
                       </>
                     )}
                   </div>
-                </article>
+                                   {view === "review" && (
+                     <div style={styles.reviewPanel}>
+                       <strong>Clinical review required</strong>
+                       <p>Verify clinical documentation, patient safety and outstanding follow-up.
+                         Do not archive an unresolved or urgent referral.</p>
+                       <label style={styles.reviewLabel}>
+                         <input type="checkbox"
+                           checked={!!reviewConfirmed[referral.id]}
+                           onChange={event => setReviewConfirmed(prev => ({
+                             ...prev, [referral.id]: event.target.checked,
+                           }))} />
+                         I have reviewed this consultation and confirmed it is safe to archive.
+                       </label>
+                       <input style={styles.archiveSearch}
+                         aria-label="Reason for archiving"
+                         placeholder="Archive reason (required)"
+                         value={archiveReason[referral.id] || ""}
+                         onChange={event => setArchiveReason(prev => ({
+                           ...prev, [referral.id]: event.target.value,
+                         }))} />
+                       <button type="button" style={styles.completeButton}
+                         disabled={workingId !== null || !reviewConfirmed[referral.id] ||
+                           !archiveReason[referral.id]?.trim()}
+                         onClick={() => void changeArchive("archive", referral)}>
+                         {workingId === referral.id ? "Archiving..." : "Archive after review"}
+                       </button>
+                     </div>
+                   )}
+                   {view === "archive" && (
+                     <div style={styles.reviewPanel}>
+                       <p>Archived: {formatDate(referral.archived_at || null)}</p>
+                       <p>Reason: {referral.archive_reason || "Not recorded"}</p>
+                       <button type="button" style={styles.refreshButton}
+                         disabled={workingId !== null}
+                         onClick={() => void changeArchive("restore", referral)}>
+                         {workingId === referral.id ? "Restoring..." : "Restore referral"}
+                       </button>
+                     </div>
+                   )}
+                 </article>
               );
             },
           )}
@@ -694,6 +850,26 @@ const styles: Record<
   string,
   React.CSSProperties
 > = {
+  archiveToolbar: {
+    maxWidth: "1100px", margin: "0 auto 20px", background: "#ffffff",
+    padding: "20px", borderRadius: "18px", display: "grid", gap: "14px",
+  },
+  archiveTabs: { display: "flex", gap: "10px", flexWrap: "wrap" },
+  archiveTab: {
+    padding: "12px 16px", borderRadius: "12px", border: "1px solid #cbd5e1",
+    background: "#f8fafc", color: "#334155", cursor: "pointer", fontWeight: 700,
+  },
+  archiveTabSelected: { background: "#1d4ed8", color: "#ffffff" },
+  archiveSearch: {
+    width: "100%", boxSizing: "border-box", padding: "12px",
+    border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "15px",
+  },
+  archiveHelp: { margin: 0, color: "#475569", fontSize: "14px" },
+  reviewPanel: {
+    marginTop: "20px", padding: "18px", borderRadius: "14px",
+    background: "#f8fafc", display: "grid", gap: "12px",
+  },
+  reviewLabel: { display: "flex", gap: "10px", alignItems: "flex-start" },
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
